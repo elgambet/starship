@@ -15,6 +15,10 @@ npm run dev
 
 Open the local address printed by Vite. `npm run build` creates the production bundle in `dist/`.
 
+### Deploy to GitLab Pages
+
+[`.gitlab-ci.yml`](.gitlab-ci.yml) builds the site on every branch and merge request, and publishes it with GitLab Pages on the default branch. Push to GitLab, wait for the `pages` job, and open **Deploy → Pages** in the project to find the URL (usually `https://<namespace>.gitlab.io/<project>/`). The Vite base is relative ([`vite.config.js`](vite.config.js)), so the same build works at any path; set `VITE_BASE` to force an absolute one.
+
 The viewer includes Exterior, Cutaway and Ghost shell modes; eight camera presets; deck and measurement labels; and a 1.8 m × 0.3 m clearance capsule toggle. Drag to orbit, scroll to zoom and right drag to pan. The section exposes four actual annular deck floors linked by three steep straight stairs (ship's-ladder style, about 50°) beside a central storage core with numbered doors, as in the SpaceX cabin render. Two separately enclosed approximately 13 m³ airlocks each have inner and outer hatch apertures. Both reach the rear garage and the lift upper station. Deck B has enclosed hygiene, science, storage and exercise fixtures; Deck C has four control stations aligned with the front windows; Deck D, inside the nose base, has four open berth pods and a compact galley. The exterior proportions (8.4 m blunt-ogive nose, 9.2 m dark crew/garage band, decal sizes and leg fairings) are matched to the NASA/SpaceX lunar-surface render; the hull uses a clear-coated white painted-steel material with metric weld and panel maps and image-based reflections.
 
 The exterior was revised after comparison with a SpaceX/NASA concept-art crop; the initial and reference screenshots, identified problems and corrections are in [VISUAL_QA.md](research/VISUAL_QA.md). The viewer is a stylized real-time spatial model. Photoreal materials and detailed exterior hardware would be a separate visual-fidelity pass.
