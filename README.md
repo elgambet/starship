@@ -93,6 +93,16 @@ The screenshots/reference copies are stored for local research and retain their 
 - Published dimensions and artistic estimates are visibly distinguishable in the UI or model data.
 - No fan concept is silently presented as a confirmed HLS blueprint.
 
+## First-person mode (phase two, desktop)
+
+On desktop browsers the top bar shows **Walk in first person**. It hides the interface except an exit button and spawns a 1.8 m-eye walker on the surface beside the lift ([`src/firstPerson.js`](src/firstPerson.js)).
+
+- Click to capture the mouse/trackpad, **W A S D** to move, **Shift** to run, **E** or click to press a lift button, **Esc** to release the mouse.
+- The lift car is open on its hull side. Use the call panel at the ground station, the panel inside the car, or the panel at the garage gate. The car stops flush with Deck A.
+- Collision uses a three.js `Octree` with a 0.3 m capsule. Boxes are simplified to cuboids; open surfaces (hull, nose, stair ramps, guard rails) are two-sided; the terrain uses its analytic height function. Lunar gravity is 1.62 m/s².
+- Interior fit-out ([`src/interior.js`](src/interior.js)) follows the local references: hex-quilted airlocks with soft black hatches in padded white rims, bolted outer rims, grab bars, light coves, display panels and ladder racks; a framed, perforated lift cage; Cabin 1-style berths with wood ceilings and glowing end frames; a control deck with tripod seats, a display bar, curved wood benches, an icon light strip and polished flat-bar rails. Walls run floor to ceiling.
+- Walking route: lift → garage gate → either airlock (outer and inner hatches) → Deck A hall → spiral stair, whose foot and landing portals face the window side (+Z) → Decks B, C and D.
+
 ## Later objective: walkable level (not part of the first version)
 
 A later phase should use a **1.8 m tall human character** to explore the accessible interior and, eventually, the elevator and lunar surface. Plan for familiar shooter controls: **W/A/S/D** movement, mouse look with pointer lock, **Shift** sprint, **Ctrl** crouch, and optional jump/interact keys. Use collision, stairs/ladder or elevator interaction, doorway clearances and camera height appropriate to a 1.8 m avatar. Movement speed, suit size and gravity behavior will be game-design choices, not inferred spacecraft dimensions. This phase is recorded here only; it is **not implemented now**.

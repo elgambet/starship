@@ -9,6 +9,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { createLunarTerrain } from './terrain.js';
+import { createFirstPerson } from './firstPerson.js';
+import { buildInterior } from './interior.js';
+import { Octree } from 'three/addons/math/Octree.js';
 import { dimensions as D, deckNames } from './dimensions.js';
 import './style.css';
 
@@ -23,7 +26,7 @@ app.innerHTML = `<button class="mobile-menu" aria-label="Open controls">☰</but
   <div class="group"><h2>Published scale</h2><div class="fact"><strong>52 m</strong><span class="badge">Published</span><label>Approximate vehicle height</label></div><div class="fact"><strong>9 m</strong><span class="badge">Published</span><label>Nominal hull diameter</label></div><div class="fact"><strong>35.1 m</strong><span class="badge">Published</span><label>Approximate elevator boarding height</label></div><div class="fact"><strong>2 × ~13 m³</strong><span class="badge">Published</span><label>Separate airlock volumes</label></div></div>
   <div class="group"><h2>Model interpretation</h2><p class="note"><span class="badge observed">Observed</span> motifs come from SpaceX and NASA images. <span class="badge estimated">Estimated</span> deck positions, stairs, rooms, windows and furniture form a connected concept layout. They are not released vehicle drawings.</p></div>
   <p class="note">Drag to orbit · scroll to zoom · right drag to pan<br/>WASD walking is planned for the next phase.</p>
-</aside><main class="viewport"><div class="topbar"><div class="title">CREWED LUNAR LANDER / SECTION STUDY</div><div class="top-actions"><button class="chip on" id="labels-chip" title="Toggle deck labels (L)">Labels</button><div class="status" id="view-status">EXTERIOR · FULL SHIP</div></div></div><div class="layer-tooltip" id="view-description">Orbit the complete vehicle, then choose Cutaway to inspect the four connected decks.</div><div class="footer"><span>NASA / SpaceX public references · layout estimates marked</span><span class="compass">+Z WINDOW SIDE ↗</span></div></main>`;
+</aside><main class="viewport"><div class="topbar"><div class="title">CREWED LUNAR LANDER / SECTION STUDY</div><div class="top-actions"><button class="chip walk" id="walk-btn" title="Walk the ship in first person (desktop)">Walk in first person</button><button class="chip on" id="labels-chip" title="Toggle deck labels (L)">Labels</button><div class="status" id="view-status">EXTERIOR · FULL SHIP</div></div></div><div class="layer-tooltip" id="view-description">Orbit the complete vehicle, then choose Cutaway to inspect the four connected decks.</div><div class="fp-hud" hidden><button class="fp-exit" id="fp-exit">← Exit first person</button><div class="fp-cross"></div><div class="fp-prompt" id="fp-prompt"></div><div class="fp-help" id="fp-help"><strong>First person</strong><span>Click to look around</span><span><b>W A S D</b> move · <b>Shift</b> run</span><span><b>E</b> or click · use lift buttons</span><span><b>Esc</b> releases the mouse</span></div></div><div class="footer"><span>NASA / SpaceX public references · layout estimates marked</span><span class="compass">+Z WINDOW SIDE ↗</span></div></main>`;
 
 const viewport = $('.viewport');
 const scene = new THREE.Scene();
@@ -71,6 +74,18 @@ const M = {
   light:new THREE.MeshStandardMaterial({color:'#ecfbff',emissive:'#dce8ed',emissiveIntensity:2.5,roughness:.3}),
   screen:new THREE.MeshStandardMaterial({color:'#06141c',emissive:'#0b586b',emissiveIntensity:.65,roughness:.12})
 };
+M.lining=new THREE.MeshStandardMaterial({color:'#ffffff',roughness:.5,metalness:.02,side:THREE.DoubleSide});
+M.floor.map=null;M.floor.color.set('#26292c');M.floor.roughness=.62;M.floor.metalness=.15;
+function worldVarying(sh){sh.vertexShader=sh.vertexShader.replace('#include <common>','#include <common>\nvarying vec3 vWorldP;').replace('#include <begin_vertex>','#include <begin_vertex>\nvWorldP=(modelMatrix*vec4(transformed,1.)).xyz;');sh.fragmentShader=sh.fragmentShader.replace('#include <common>','#include <common>\nvarying vec3 vWorldP;')}
+M.lining.onBeforeCompile=sh=>{worldVarying(sh);sh.fragmentShader=sh.fragmentShader.replace('#include <map_fragment>','#ifdef USE_MAP\n vec2 cylUv=vec2(atan(vWorldP.x,vWorldP.z)*4.19/1.2,vWorldP.y/1.2);diffuseColor*=texture2D(map,cylUv);\n#endif')};
+M.floor.onBeforeCompile=sh=>{worldVarying(sh);sh.fragmentShader=sh.fragmentShader.replace('#include <map_fragment>',`#include <map_fragment>
+  { vec2 fp=vWorldP.xz; float r=length(fp); float ang=atan(fp.x,fp.y); float seg=PI/6.;
+    float k=floor(ang/seg); float local=ang-k*seg; float da=min(local,seg-local)*r;
+    float ring=min(min(abs(r-2.3),abs(r-3.3)),abs(r-1.62));
+    float diag=abs((local/seg)-(r-2.3)/1.0)*r*seg; diag=(r>2.3&&r<3.3)?diag:1.;
+    float line=min(min(da,ring),diag);
+    diffuseColor.rgb*=mix(.42,1.,smoothstep(.003,.011,line));
+    diffuseColor.rgb*=.94+.06*fract(sin(dot(floor(vec2(k,floor(r/1.)))*1.7,vec2(12.9898,78.233)))*43758.5453); }`)};
 const groups={shellFront:new THREE.Group(),shellBack:new THREE.Group(),noseFront:new THREE.Group(),noseBack:new THREE.Group(),innerFront:new THREE.Group(),windows:new THREE.Group(),decals:new THREE.Group(),interior:new THREE.Group(),labels:new THREE.Group(),detailLabels:new THREE.Group(),guides:new THREE.Group(),hardware:new THREE.Group(),debug:new THREE.Group()};
 // Labels and guides render in an overlay pass after post-processing so AO never smears them.
 const overlay=new THREE.Scene();
@@ -80,9 +95,14 @@ groups.guides.visible=false;
 function mesh(geo,material,parent=groups.interior,x=0,y=0,z=0){const o=new THREE.Mesh(geo,material);o.position.set(x,y,z);parent.add(o);return o}
 const boxCache=new Map();
 function roundedBox(w,h,d){const key=`${w}|${h}|${d}`;if(!boxCache.has(key)){const r=Math.min(.035,Math.min(w,h,d)*.3);boxCache.set(key,r<.004?new THREE.BoxGeometry(w,h,d):new RoundedBoxGeometry(w,h,d,2,r))}return boxCache.get(key)}
-function box(w,h,d,x,y,z,material=M.panel,parent=groups.interior){const o=mesh(roundedBox(w,h,d),material,parent,x,y,z);o.castShadow=true;o.receiveShadow=true;return o}
+// Every box and beam is also registered as a simple collision box for the first-person mode.
+const solids=[],extraColliders=[];
+function box(w,h,d,x,y,z,material=M.panel,parent=groups.interior){const o=mesh(roundedBox(w,h,d),material,parent,x,y,z);o.castShadow=true;o.receiveShadow=true;solids.push({mesh:o,w,h,d});return o}
 // Rectangular beam between two points (local Y along the beam).
-function beam(a,b,w,d,material,parent=groups.hardware){const av=new THREE.Vector3(...a),bv=new THREE.Vector3(...b);const o=mesh(new RoundedBoxGeometry(w,av.distanceTo(bv),d,2,Math.min(w,d)*.25),material,parent,...av.clone().add(bv).multiplyScalar(.5).toArray());o.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),bv.clone().sub(av).normalize());o.castShadow=true;o.receiveShadow=true;return o}
+function beam(a,b,w,d,material,parent=groups.hardware){const av=new THREE.Vector3(...a),bv=new THREE.Vector3(...b);const o=mesh(new RoundedBoxGeometry(w,av.distanceTo(bv),d,2,Math.min(w,d)*.25),material,parent,...av.clone().add(bv).multiplyScalar(.5).toArray());o.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),bv.clone().sub(av).normalize());o.castShadow=true;o.receiveShadow=true;solids.push({mesh:o,w,h:av.distanceTo(bv),d});return o}
+// Polished flat-bar rail swept along points (as on the SpaceX cabin render), and flat posts.
+function flatBar(points,width=.018,height=.065,material=M.rail,parent=groups.interior){const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));const sh=new THREE.Shape();sh.moveTo(-width/2,-height/2);sh.lineTo(width/2,-height/2);sh.lineTo(width/2,height/2);sh.lineTo(-width/2,height/2);sh.closePath();const o=mesh(new THREE.ExtrudeGeometry(sh,{steps:Math.max(16,points.length*3),bevelEnabled:false,extrudePath:curve}),material,parent);o.castShadow=true;return o}
+function flatPost(base,height,angle,material=M.rail,parent=groups.interior){const o=mesh(new THREE.BoxGeometry(.05,height,.016),material,parent,base[0],base[1]+height/2,base[2]);o.rotation.y=angle;o.castShadow=true;return o}
 // Smooth tube through a list of points (handrails).
 function tube(points,radius,material=M.rail,parent=groups.interior){const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));const o=mesh(new THREE.TubeGeometry(curve,Math.max(8,points.length*6),radius,8,false),material,parent);o.castShadow=true;return o}
 function rod(a,b,r,material=M.frame,parent=groups.interior){const av=new THREE.Vector3(...a),bv=new THREE.Vector3(...b);const o=mesh(new THREE.CylinderGeometry(r,r,av.distanceTo(bv),10),material,parent,...av.clone().add(bv).multiplyScalar(.5).toArray());o.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),bv.sub(av).normalize());o.castShadow=true;return o}
@@ -153,8 +173,8 @@ for(let i=0;i<96;i++){
   else segment(4.5,BAND0,isWindow?w.bottom:BAND1,a0,a1,M.collar,target);
   if(isWindow)segment(4.5,w.top,BAND1,a0,a1,M.collar,target);
   const innerStart=isGarageGate?gateTop:35.1,innerTop=BAND1-.05;
-  segment(4.19,innerStart,isWindow?w.bottom:innerTop,a0,a1,M.inner,innerTarget);
-  if(isWindow)segment(4.19,w.top,innerTop,a0,a1,M.inner,innerTarget);
+  segment(4.19,innerStart,isWindow?w.bottom:innerTop,a0,a1,M.lining,innerTarget);
+  if(isWindow)segment(4.19,w.top,innerTop,a0,a1,M.lining,innerTarget);
 }
 // Curved vector decals sized from the reference render: flag ≈2.2 × 1.25 m, NASA mark ≈2.5 m wide.
 function decalTexture(draw,w,h){const c=document.createElement('canvas');c.width=w;c.height=h;draw(c.getContext('2d'),w,h);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;t.anisotropy=8;return t}
@@ -185,12 +205,14 @@ torus(.56,.06,51.9,M.frame,groups.hardware,Math.PI*2,0,0,0);
 // Band joints: protruding lips top and bottom, one mid ring and a row of vent holes along the bottom lip.
 const lipMat=new THREE.MeshPhysicalMaterial({color:'#2a3138',roughness:.35,metalness:.7,clearcoat:.6});
 // Band rings as front/back half-arcs so the front half disappears with the cut shell.
-function bandRing(r,y,radius,material){for(const [g,a0] of [[groups.shellFront,-Math.PI/2],[groups.shellBack,Math.PI/2]]){const pts=[];for(let k=0;k<=48;k++)pts.push(polar(r,a0+Math.PI*k/48,y));tube(pts,radius,material,g)}}
+const GATE={half:.34,y0:35.0,y1:37.45},inGate=a=>Math.abs(Math.atan2(Math.sin(a-Math.PI),Math.cos(a-Math.PI)))<GATE.half;
+function bandRing(r,y,radius,material){const arcs=[[groups.shellFront,-Math.PI/2,Math.PI/2]];if(y>GATE.y0&&y<GATE.y1)arcs.push([groups.shellBack,Math.PI/2,Math.PI-GATE.half],[groups.shellBack,Math.PI+GATE.half,Math.PI*1.5]);else arcs.push([groups.shellBack,Math.PI/2,Math.PI*1.5]);
+  for(const [g,a0,a1] of arcs){const pts=[],n=Math.max(4,Math.ceil((a1-a0)*16));for(let k=0;k<=n;k++)pts.push(polar(r,a0+(a1-a0)*k/n,y));tube(pts,radius,material,g)}}
 for(const y of [BAND0+.04,BAND1-.04])bandRing(4.52,y,.05,lipMat);
 const collarSeam=mat('#3d4952',.5,.5);
 for(const y of [BAND0+.62,36.4,38.45,39.0,40.6,41.4,43.05])bandRing(4.506,y,.01,collarSeam);
 bandRing(4.53,38.95,.07,lipMat);
-for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p=polar(4.512,a);rod([p[0],BAND0+.65,p[2]],[p[0],BAND1-.08,p[2]],.007,collarSeam,Math.cos(a)>0?groups.shellFront:groups.shellBack)}
+for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p=polar(4.512,a),g=Math.cos(a)>0?groups.shellFront:groups.shellBack;if(inGate(a)){rod([p[0],BAND0+.65,p[2]],[p[0],GATE.y0,p[2]],.007,collarSeam,g);rod([p[0],GATE.y1,p[2]],[p[0],BAND1-.08,p[2]],.007,collarSeam,g)}else rod([p[0],BAND0+.65,p[2]],[p[0],BAND1-.08,p[2]],.007,collarSeam,g)}
 {const holeGeo=new THREE.CircleGeometry(.1,16),holeMat=mat('#8d969c',.5,.6);for(const [g,front] of [[groups.shellFront,true],[groups.shellBack,false]]){const holes=new THREE.InstancedMesh(holeGeo,holeMat,36);const o=new THREE.Object3D();let n=0;for(let i=0;i<72;i++){const a=i*2*Math.PI/72;if((Math.cos(a)>0)!==front)continue;o.position.set(...polar(4.509,a,BAND0+.32));o.rotation.set(0,a,0);o.updateMatrix();holes.setMatrixAt(n++,o.matrix)}holes.count=n;g.add(holes)}}
 // Subtle body seams on the white hull, kept low-contrast as on the painted reference.
 const hullSeam=mat('#c9cdcf',.6,.2);
@@ -257,116 +279,93 @@ for(let i=0;i<4;i++){const a=Math.PI/4+i*Math.PI/2;
   mesh(new THREE.SphereGeometry(.3,20,14),legMetal,groups.hardware,padC[0],.36,padC[2]).castShadow=true;
 }
 
-// External lift guide, platform and ground landing; the upper platform is exactly flush with Deck A.
-for(const x of [-1.15,1.15]){rod([x,.1,-5.0],[x,35.5,-5.0],.09,M.frame,groups.hardware);rod([x,.1,-6.9],[x,.1,-5],.06,M.frame,groups.hardware)}
-const lift=groups.hardware;
-box(2.6,.13,2.2,0,35.035,-5.45,M.floor,lift);
-box(2.6,.13,2.2,0,.07,-5.45,M.floor,lift);
-for(let i=0;i<11;i++)box(2.55,.025,.045,0,35.11,-6.45+i*.2,M.frame,lift);
-for(const x of [-1.3,1.3])for(const z of [-6.5,-4.4])rod([x,35.1,z],[x,37,z],.045,M.frame,lift);
-for(const z of [-6.5,-4.4])rod([-1.3,37,z],[1.3,37,z],.045,M.frame,lift);
-for(const x of [-1.3,1.3])rod([x,37,-6.5],[x,37,-4.4],.045,M.frame,lift);
-for(const z of [-6.5,-4.4])for(let y=35.45;y<37;y+=.32)rod([-1.3,y,z],[1.3,y,z],.014,M.frame,lift);
-rod([0,35.2,-5],[0,36.95,-5],.035,M.dark,lift);
+// External lift: twin guide rails, a ground pad, a moving railed car and three call panels.
+// The car is open on its hull side; at the top its floor is flush with Deck A and the garage gate.
+const LIFT={halfX:1.3,z0:-6.55,z1:-4.35,cz:-5.45,bottom:.25,top:D.decks.value[0],speed:2.8,accel:.9};
+for(const x of [-1.52,1.52]){rod([x,0,LIFT.cz],[x,38.3,LIFT.cz],.09,M.frame,groups.hardware);rod([x,38.1,LIFT.cz],[x*.9,38.1,-4.45],.06,M.frame,groups.hardware)}
+rod([-1.52,38.3,LIFT.cz],[1.52,38.3,LIFT.cz],.08,M.frame,groups.hardware);
+box(2.9,.13,2.5,0,.065,LIFT.cz,M.floor,groups.hardware);
+const liftCar=new THREE.Group();liftCar.position.set(0,LIFT.bottom,LIFT.cz);groups.hardware.add(liftCar);
+box(2.6,.12,2.2,0,-.06,0,M.tread,liftCar);
+for(let i=0;i<21;i++)box(2.5,.012,.03,0,.006,-1+i*.1,M.frame,liftCar);
+// Cage after the NASA elevator render: dark square-tube frame, X-bracing, perforated lower panels, steel U-rails.
+const cageMat=new THREE.MeshPhysicalMaterial({color:'#2c3135',roughness:.45,metalness:.7});
+const perf=(()=>{const c=document.createElement('canvas');c.width=c.height=256;const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,256,256);g.fillStyle='#000';for(let y=8;y<256;y+=14)for(let x=8;x<256;x+=14)g.fillRect(x,y,7,5);const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(3,1.2);return t})();
+const perfMat=new THREE.MeshStandardMaterial({color:'#7d858a',roughness:.5,metalness:.6,alphaMap:perf,alphaTest:.5,side:THREE.DoubleSide});
+const CAGE=2.5;
+for(const [x,z] of [[-1.25,-1.05],[1.25,-1.05],[-1.25,.95],[1.25,.95]])box(.08,CAGE,.08,x,CAGE/2,z,cageMat,liftCar);
+box(2.58,.08,.08,0,CAGE,-1.05,cageMat,liftCar);for(const x of [-1.25,1.25]){box(.08,.08,2.08,x,CAGE,-.05,cageMat,liftCar);box(.06,.06,2.0,x,1.15,-.05,cageMat,liftCar)}
+box(2.5,.06,.06,0,1.15,-1.05,cageMat,liftCar);
+for(const x of [-1.25,1.25]){beam([x,.1,-1.0],[x,1.12,.9],.04,.04,cageMat,liftCar);beam([x,.1,.9],[x,1.12,-1.0],.04,.04,cageMat,liftCar);beam([x,1.18,-1.0],[x,2.42,.9],.04,.04,cageMat,liftCar)}
+for(const [w,h,x,z,ry] of [[2.0,.9,-1.25,-.05,Math.PI/2],[2.0,.9,1.25,-.05,Math.PI/2],[2.45,.9,0,-1.05,0]]){const pnl=mesh(new THREE.PlaneGeometry(w,h),perfMat,liftCar,x,.5,z);pnl.rotation.y=ry}
+const liftRail=new THREE.MeshPhysicalMaterial({color:'#d3d8db',roughness:.16,metalness:1});
+for(const x of [-1.05,1.05])tube([[x,0,.95],[x,1.0,.95],[x,1.05,.85],[x,1.0,.6],[x,0,.6]].map(([a,b,c])=>[a,b,c]),.022,liftRail,liftCar);
+// Interactive call panels (first-person mode uses E or click; the viewer can watch the car move).
+const interactables=[];
+function callPanel(pos,rotY,parent,label,action){const g=new THREE.Group();g.position.set(...pos);g.rotation.y=rotY;parent.add(g);box(.24,.36,.07,0,0,0,M.dark,g);
+  const button=mesh(new THREE.CylinderGeometry(.06,.06,.035,28),new THREE.MeshStandardMaterial({color:'#2a0d08',emissive:'#ff6a3d',emissiveIntensity:.7,roughness:.4}),g,0,.03,.045);button.rotation.x=Math.PI/2;
+  const lamp=mesh(new THREE.CircleGeometry(.025,16),new THREE.MeshBasicMaterial({color:'#7dffb0'}),g,0,-.11,.036);
+  interactables.push({mesh:button,label,action});return button}
+const lift={y:LIFT.bottom,target:LIFT.bottom,v:0,
+  get moving(){return Math.abs(this.target-this.y)>1e-3},
+  get atTop(){return this.target===LIFT.top},
+  go(level){this.target=level==='top'?LIFT.top:LIFT.bottom},
+  update(dt){const d=this.target-this.y;if(Math.abs(d)<1e-3){this.y=this.target;this.v=0}else{const vmax=Math.min(LIFT.speed,Math.sqrt(2*LIFT.accel*Math.abs(d))+.05);this.v=Math.sign(d)*Math.min(vmax,Math.abs(this.v)+LIFT.accel*dt);const step=this.v*dt;this.y=Math.abs(step)>=Math.abs(d)?this.target:this.y+step}liftCar.position.y=this.y},
+  bounds(){return {x0:-LIFT.halfX,x1:LIFT.halfX,z0:LIFT.z0,z1:LIFT.z1,floor:this.y,rails:[[[-1.25,LIFT.cz-1.05],[1.25,LIFT.cz-1.05]],[[-1.25,LIFT.cz-1.05],[-1.25,LIFT.cz+1.0]],[[1.25,LIFT.cz-1.05],[1.25,LIFT.cz+1.0]]]}}};
+const groundPost=rod([2.7,0,-7.3],[2.7,1.2,-7.3],.05,M.frame,groups.hardware);
+callPanel([2.7,1.15,-7.37],Math.PI,groups.hardware,()=>lift.moving?'Lift moving…':(lift.atTop?'Call lift down':'Lift is here'),()=>lift.go('bottom'));
+callPanel([1.3,36.25,-4.2],Math.PI,groups.interior,()=>lift.moving?'Lift moving…':(lift.atTop?'Lift is here':'Call lift up'),()=>lift.go('top'));
+callPanel([.55,.95,-1.0],0,liftCar,()=>lift.moving?'Lift moving…':(lift.atTop?'Go down to the surface':'Go up to the garage'),()=>lift.go(lift.atTop?'bottom':'top'));
 
 // Annular slabs with a genuine central 3 m aperture. Each tread reaches the ring edge.
-function annularFloor(y,i){const shape=new THREE.Shape();shape.absarc(0,0,4.18,0,Math.PI*2,false);const hole=new THREE.Path();hole.absarc(0,.3,1.5,0,Math.PI*2,true);if(i>0)shape.holes.push(hole);const g=new THREE.ExtrudeGeometry(shape,{depth:D.floorThickness.value,bevelEnabled:false,curveSegments:96});g.rotateX(Math.PI/2);const o=mesh(g,M.floor,groups.interior,0,y,0);o.receiveShadow=true;if(i>0)torus(1.50,.055,y+.07,M.floorEdge,groups.interior);return o}
+function annularFloor(y,i){const shape=new THREE.Shape();shape.absarc(0,0,4.18,0,Math.PI*2,false);const hole=new THREE.Path();hole.absarc(0,.3,1.5,0,Math.PI*2,true);if(i>0)shape.holes.push(hole);const g=new THREE.ExtrudeGeometry(shape,{depth:D.floorThickness.value,bevelEnabled:false,curveSegments:96});g.rotateX(Math.PI/2);const o=mesh(g,M.floor,groups.interior,0,y,0);o.receiveShadow=true;o.userData.collider=true;if(i>0)torus(1.50,.055,y+.07,M.floorEdge,groups.interior);return o}
 D.decks.value.forEach(annularFloor);
 // Deck A garage opening in the -Z shell: bridge to external platform, with clear gate.
 box(2.5,.12,.65,0,35.04,-4.43,M.floor,groups.interior);
 // The 54 treads form three one-turn flights. A landable walking line is radius ~1.0 m.
 const stairCx=0,stairCz=.3,innerR=.43,outerR=1.47,steps=18;
 function stairTread(y,a0,a1){const s=new THREE.Shape();const p1=polar(innerR,a0,0,stairCx,stairCz),p2=polar(outerR,a0,0,stairCx,stairCz),p3=polar(outerR,a1,0,stairCx,stairCz),p4=polar(innerR,a1,0,stairCx,stairCz);s.moveTo(p1[0],p1[2]);s.lineTo(p2[0],p2[2]);for(let k=1;k<=4;k++){const p=polar(outerR,a0+(a1-a0)*k/4,0,stairCx,stairCz);s.lineTo(p[0],p[2])}s.lineTo(p4[0],p4[2]);for(let k=3;k>=0;k--){const p=polar(innerR,a0+(a1-a0)*k/4,0,stairCx,stairCz);s.lineTo(p[0],p[2])}s.closePath();const g=new THREE.ExtrudeGeometry(s,{depth:.06,bevelEnabled:true,bevelThickness:.01,bevelSize:.01,bevelSegments:1,curveSegments:4});g.rotateX(Math.PI/2);const o=mesh(g,M.tread,groups.interior,0,y,0);o.receiveShadow=true;o.castShadow=true}
-const stairStart=-Math.PI/2;
-const stairRail=new THREE.MeshPhysicalMaterial({color:'#c9cfd2',roughness:.25,metalness:.9,clearcoat:.3});
+// The stair foot and every landing portal face +Z (window side), where all four decks have clear floor.
+const stairStart=0;
+const stairRail=new THREE.MeshPhysicalMaterial({color:'#d3d8db',roughness:.16,metalness:1,clearcoat:.3});
 const railR=1.38,railH=.92,rise=D.deckSpacing.value/steps;
 for(let flight=0;flight<3;flight++){const base=D.decks.value[flight];const railPts=[];
   for(let i=0;i<steps;i++){const a0=stairStart+i*2*Math.PI/steps,a1=a0+2*Math.PI/steps,yt=base+(i+1)*rise,am=(a0+a1)/2;stairTread(yt,a0,a1);
-    if(i>=2){const b=polar(railR,am,yt,stairCx,stairCz);rod(b,[b[0],yt+railH,b[2]],.016,stairRail)}}
-  for(let k=0;k<=48;k++){const t=2/steps+k/48*(1-2/steps),a=stairStart+t*2*Math.PI+Math.PI/steps,y=base+t*D.deckSpacing.value+rise*.5+railH;railPts.push(polar(railR,a,y,stairCx,stairCz))}
-  tube(railPts,.028,stairRail)}
+    if(i>=2&&i<steps-2&&i%2===0){const b=polar(railR,am,yt,stairCx,stairCz);flatPost(b,railH,am,stairRail)}}
+  for(let k=0;k<=48;k++){const t=2/steps+k/48*(1-4/steps),a=stairStart+t*2*Math.PI+Math.PI/steps,y=base+t*D.deckSpacing.value+rise*.5+railH;railPts.push(polar(railR,a,y,stairCx,stairCz))}
+  flatBar(railPts,.07,.018,stairRail)}
 // Central column carries the inner tread edge from Deck A to just above Deck D.
-mesh(new THREE.CylinderGeometry(innerR-.01,innerR-.01,D.decks.value[3]+1.05-D.decks.value[0],40),M.panel,groups.interior,stairCx,(D.decks.value[0]+D.decks.value[3]+1.05)/2,stairCz).castShadow=true;
+{const col=mesh(new THREE.CylinderGeometry(innerR-.01,innerR-.01,D.decks.value[3]+1.05-D.decks.value[0],40),M.panel,groups.interior,stairCx,(D.decks.value[0]+D.decks.value[3]+1.05)/2,stairCz);col.castShadow=true;col.userData.collider=true}
 torus(innerR+.01,.025,D.decks.value[3]+1.05,stairRail,groups.interior,Math.PI*2,0,stairCx,stairCz);
 for(let flight=0;flight<3;flight++){
   const vertices=[],indices=[];
   for(let i=0;i<=72;i++){const t=i/72,a=stairStart+t*Math.PI*2,y=D.decks.value[flight]+t*D.deckSpacing.value;for(const r of [innerR,outerR])vertices.push(...polar(r,a,y,stairCx,stairCz));if(i<72){const n=i*2;indices.push(n,n+1,n+2,n+1,n+3,n+2)}}
   const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));g.setIndex(indices);g.computeVertexNormals();
   const ramp=mesh(g,new THREE.MeshBasicMaterial({visible:false,side:THREE.DoubleSide}),groups.interior);
-  ramp.userData={collisionSurface:true,flight:flight+1,visibility:'debug-only'};
+  ramp.userData={collider:true,collisionSurface:true,flight:flight+1,visibility:'debug-only'};
 }
-// Floor-edge guarding around each opening leaves a 1.2 m landing portal at -X where the stair arrives and departs.
-{const guardR=1.58,gap=.4,a0=-Math.PI/2+gap,a1=-Math.PI/2+Math.PI*2-gap;
+// Floor-edge guarding around each opening leaves a landing portal at +Z where the stair arrives and departs.
+// Deck D has no flight above it, so its portal opens only onto the arriving flight and a radial rail closes the rest.
+function colliderSegment(r,y0,y1,a0,a1,cx=0,cz=.3){const o=new THREE.Mesh(new THREE.CylinderGeometry(r,r,y1-y0,Math.max(4,Math.ceil((a1-a0)*24)),1,true,a0,a1-a0));o.position.set(cx,(y0+y1)/2,cz);o.updateMatrixWorld();extraColliders.push(o);return o}
+function colliderStrip(points,bottom,top){const pos=[],idx=[];points.forEach((p,i)=>{pos.push(p[0],p[1]+bottom,p[2],p[0],p[1]+top,p[2]);if(i){const n=i*2;idx.push(n-2,n-1,n,n-1,n+1,n)}});const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setIndex(idx);const o=new THREE.Mesh(g);o.updateMatrixWorld();extraColliders.push(o);return o}
+{const guardR=1.58;
   for(const [di,y] of D.decks.value.entries()){if(di===0)continue;
-    for(const h of [1.0,.52]){const pts=[];for(let k=0;k<=64;k++){const a=a0+(a1-a0)*k/64;pts.push(polar(guardR,a,y+h,0,.3))}tube(pts,h>.9?.03:.018,stairRail)}
-    for(let k=0;k<=14;k++){const a=a0+(a1-a0)*k/14,b=polar(guardR,a,y,0,.3);rod(b,[b[0],y+1.0,b[2]],.022,stairRail)}}}
+    const top=di===3,a0=stairStart+(top?.02:.4),a1=stairStart+Math.PI*2-(top?.55:.4);
+    for(const h of [1.0,.52]){const pts=[];for(let k=0;k<=64;k++){const a=a0+(a1-a0)*k/64;pts.push(polar(guardR,a,y+h,0,.3))}flatBar(pts,h>.9?.075:.035,.018,stairRail)}
+    for(let k=0;k<=10;k++){const a=a0+(a1-a0)*k/10,b=polar(guardR,a,y,0,.3);flatPost(b,1.0,a,stairRail)}
+    colliderSegment(guardR,y,y+1.1,a0,a1);
+    if(top){const a=stairStart+.02,p0=polar(innerR,a,y,0,.3),p1=polar(guardR,a,y,0,.3);for(const h of [1.0,.52])rod([p0[0],y+h,p0[2]],[p1[0],y+h,p1[2]],h>.9?.03:.018,stairRail);rod([p0[0]*.5+p1[0]*.5,y,p0[2]*.5+p1[2]*.5],[p0[0]*.5+p1[0]*.5,y+1,p0[2]*.5+p1[2]*.5],.022,stairRail);colliderStrip([p0,p1],0,1.1)}}}
+// Stair outer edge: an invisible wall under the handrail stops walking off the flight.
+for(let flight=0;flight<3;flight++){const base=D.decks.value[flight],pts=[];for(let k=0;k<=48;k++){const t=2/steps+k/48*(1-4/steps),a=stairStart+t*2*Math.PI;pts.push(polar(railR+.04,a,base+t*D.deckSpacing.value,stairCx,stairCz))}colliderStrip(pts,-.2,1.1)}
 
 // Window-side upper room shell seams, light bands and readable deck markers.
-for(const y of D.decks.value){const top=Math.min(y+2.65,BAND1-.1),inNose=y>=BAND1-.2,lightY=inNose?y+2.2:top,lr=Math.min(4.11,noseRadiusAt(lightY)-.18);if(!inNose)for(let i=0;i<14;i++){const a=i*2*Math.PI/14,p=polar(4.15,a);rod([p[0],y+.24,p[2]],[p[0],top,p[2]],.012,M.panel,Math.cos(a)>0?groups.innerFront:groups.interior)}for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p0=polar(lr,a,lightY),p1=polar(lr,a+2*Math.PI/32,lightY);rod(p0,p1,.016,M.light,Math.cos(a+Math.PI/32)>0?groups.innerFront:groups.interior)} }
+for(const y of D.decks.value){const top=Math.min(y+2.65,BAND1-.1),inNose=y>=BAND1-.2,lightY=inNose?y+2.2:top,lr=Math.min(4.11,noseRadiusAt(lightY)-.18);if(!inNose)for(let i=0;i<14;i++){const a=i*2*Math.PI/14,p=polar(4.15,a);if(y<36&&inGate(a))continue;rod([p[0],y+.24,p[2]],[p[0],top,p[2]],.012,M.panel,Math.cos(a)>0?groups.innerFront:groups.interior)}for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p0=polar(lr,a,lightY),p1=polar(lr,a+2*Math.PI/32,lightY);rod(p0,p1,.016,M.light,Math.cos(a+Math.PI/32)>0?groups.innerFront:groups.interior)} }
 deckNames.forEach((name,i)=>label(name,5.8,D.decks.value[i]+1.3,1.3,.93,'#d7f6fb',groups.labels));
 for(const [i,y] of D.decks.value.entries()){for(const a of [Math.PI*.25,Math.PI*1.25]){const l=new THREE.PointLight(i===3?'#ffe9cc':'#eef6ff',7,8,1.6);l.position.set(...polar(2.7,a,y+(i===3?2.1:2.45)));groups.interior.add(l)}}
 
-// Two independent airlocks. Each wall has a complete 1.2 m × 2.15 m hatch opening.
-function hatchFrame(cx,z,y,side){const hw=.6,hh=2.15;for(const x of [cx-hw-.065,cx+hw+.065])box(.12,hh,.14,x,y+hh/2,z,M.dark);box(1.46,.13,.15,cx,y+hh+.06,z,M.dark);for(let q=0;q<8;q++){const x=cx-.72+q*.205;box(.035,.03,.16,x,y+hh+.13,z,M.rail)}const hinge=side>0?cx+hw+.18:cx-hw-.18;const panel=box(.055,hh*.87,1.14,hinge,y+hh*.45,z+(side>0?.25:-.25),M.dark);panel.userData.openHatch=true;return panel}
-function endWall(cx,z,y){for(const sign of [-1,1])box(.4,2.30,.10,cx+sign*.8,y+1.15,z,M.padding);box(1.2,.15,.10,cx,y+2.225,z,M.padding)}
-function airlock(cx,name){const y=35.1;for(const x of [cx-1.04,cx+1.04]){const p=box(.10,2.3,2.83,x,y+1.15,0,M.padding);p.material=M.padding}for(const z of [-1.415,1.415]){endWall(cx,z,y);hatchFrame(cx,z,y,z>0?1:-1)}box(1.94,.06,2.75,cx,y-.03,0,M.floor);box(1.96,.06,2.78,cx,y+2.31,0,M.inner);for(const z of [-.8,.8]){rod([cx-.83,y+1,z],[cx-.83,y+2,z],.03,M.dark);box(.34,.22,.025,cx+.82,y+1.4,z,M.screen)}label(name,cx,y+2.78,0,.48,'#d7f6fb');return {cx,clearSize:[2,2.83,2.3]}}
-airlock(2.55,'AIRLOCK 01');airlock(-2.55,'AIRLOCK 02');
-// Pressure boundary infill around the airlocks. Its middle section is behind the stair opening.
-for(const [x,w] of [[-3.84,.62],[0,3.05],[3.84,.62]])box(w,2.35,.1,x,36.275,-1.46,M.inner);
-// Garage hardware follows the clear rear annular route and the -Z lift gate.
-for(const x of [-3.55,3.55])box(.28,2.3,.45,x,36.25,-2.1,M.panel);
-for(const x of [-1.5,1.5])box(.12,2.25,.16,x,36.225,-4.12,M.frame);
-box(3.1,.16,.16,0,37.35,-4.12,M.frame);
-for(const x of [-1.1,1.1])box(.22,.3,.45,x,35.32,-3.85,M.dark);
-label('GARAGE → LIFT',0,37.5,-3.7,.65);
-
-// Deck B: a real privacy compartment with an open 1 m door, plus reachable work stations.
-const B=D.decks.value[1];
-function hygiene(){const x0=1.85,x1=3.55,z0=-2.2,z1=-.55,h=2.35;box(.09,h,z1-z0,x1,B+h/2,(z0+z1)/2,M.inner);for(const z of [z0,z1])box(x1-x0,h,.09,(x0+x1)/2,B+h/2,z,M.inner);box(.1,h,.31,x0,B+h/2,z0+.155,M.inner);box(.1,h,.31,x0,B+h/2,z1-.155,M.inner);box(.1,.25,1.04,x0,B+h-.125,(z0+z1)/2,M.inner);box(.45,.52,.5,2.95,B+.3,-1.75,M.panel);box(.36,.11,.4,3.1,B+1.05,-.9,M.rail);box(.25,.4,.04,3.12,B+1.32,-.66,M.dark);label('HYGIENE',3.1,B+2.8,-1.15,.48)}
-hygiene();
-// Science bench and storage cabinets sit outside the 1.5 m central circulation ring.
-box(2.15,.12,.68,1.3,B+1.04,3.05,M.amber);
-for(const x of [.3,1.3,2.3]){box(.55,.76,.56,x,B+.42,3.1,M.panel);box(.46,.045,.04,x,B+.5,2.805,M.dark)}
-box(.7,.45,.06,1.9,B+1.58,3.45,M.screen);label('SCIENCE',1.45,B+2.72,3.5,.45);
-for(const x of [-3.55,-2.8])for(let k=0;k<2;k++){box(.69,1.15,.57,x,B+.6,-1.4+k*.8,M.panel);box(.48,.07,.03,x,B+.87,-1.095+k*.8,M.dark)}
-label('STORAGE',-3.3,B+2.7,-1.2,.47);
-// Folded resistance device, footplate and restraints: no separate claimed gym.
-box(1.2,.1,.77,-.1,B+.13,-3.46,M.floorEdge);
-rod([-.63,B+.18,-3.7],[-.63,B+2.05,-3.7],.06,M.frame);rod([.42,B+.18,-3.7],[.42,B+2.05,-3.7],.06,M.frame);rod([-.63,B+2.03,-3.7],[.42,B+2.03,-3.7],.05,M.frame);rod([-.46,B+1.35,-3.65],[-.2,B+1.1,-3.4],.025,M.dark);rod([.24,B+1.35,-3.65],[.03,B+1.1,-3.4],.025,M.dark);label('EXERCISE',-.2,B+2.72,-3.65,.48);
-
-// Deck D (top, inside the nose base): four side-opening berth pods with 1 m clear portals and a compact galley.
-const C=D.decks.value[3];
-function radialGroup(angle,root){const g=new THREE.Group();g.position.set(Math.sin(angle)*3.3,C,Math.cos(angle)*3.3);g.rotation.y=angle;root.add(g);return g}
-for(const [i,deg] of [50,130,230,310].entries()){
-  const a=deg*Math.PI/180,g=radialGroup(a,groups.interior);
-  // Local +Z points outward. Both side partitions stop at the front portal.
-  box(.07,2.25,1.15,-1.04,1.125,-.36,M.inner,g);box(.07,2.25,1.15,1.04,1.125,-.36,M.inner,g);
-  box(.42,2.25,.07,-.82,1.125,-.93,M.inner,g);box(.42,2.25,.07,.82,1.125,-.93,M.inner,g);
-  box(1.1,.14,.08,0,2.18,-.93,M.inner,g);
-  box(1.77,.2,.73,0,.58,.07,M.berth,g);box(1.84,.08,.26,0,.52,-.41,M.rail,g);
-  for(const sx of [-.65,.65])box(.035,.03,.86,sx,.7,.05,M.rail,g);
-  box(.45,.55,.36,.73,1.18,.48,M.panel,g);box(.13,.035,.18,-.72,1.67,.4,M.light,g);
-  const p=polar(3.7,a,C+2.5);label(`BERTH 0${i+1}`,p[0],p[1],p[2],.43)
-}
-// Galley occupies the rear gap between berths; the central ring remains free.
-box(1.8,.75,.52,0,C+.4,-3.25,M.panel);box(1.8,.10,.62,0,C+.85,-3.21,M.amber);
-for(const x of [-.45,.45]){box(.6,.08,.53,x,C+1.2,-2.7,M.amber);box(.52,.38,.5,x,C+.34,-2.25,M.seat)}
-box(.76,.4,.06,0,C+1.55,-3.5,M.screen);label('GALLEY',0,C+2.4,-3.2,.5);
-box(1.1,.09,.46,0,C+.88,3.3,M.amber);label('SHARED WORK',0,C+2.4,3.3,.4);
-
-// Deck C follows the official concept art: four pale seats, restrained screens and a dark window arc.
-const F=D.decks.value[2];
-for(const [i,deg] of [-36,-12,12,36].entries()){
-  const a=deg*Math.PI/180,g=radialGroup(a,groups.interior);g.position.y=F;g.position.x=Math.sin(a)*3.05;g.position.z=Math.cos(a)*3.05;
-  box(.72,.18,.7,0,.54,-.02,M.panel,g);box(.61,.1,.56,0,.66,-.02,M.seat,g);box(.73,1.15,.16,0,1.23,-.3,M.panel,g);box(.62,1.0,.08,0,1.25,-.19,M.seat,g);
-  box(.79,.1,.14,0,1.86,-.31,M.panel,g);for(const x of [-.43,.43])box(.12,.12,.52,x,1.03,-.12,M.panel,g);
-  box(.73,.42,.04,0,1.18,.75,M.screen,g);box(.09,.48,.07,0,.91,.75,M.frame,g);
-  for(const sx of [-.19,0,.19])box(.12,.016,.007,sx,1.22,.779,sx===0?M.light:M.blue,g)
-}
-// Curved workstation bank on the opposite side and flush service panels.
-for(let i=0;i<8;i++){const a=Math.PI-1.02+i*2.04/7,p=polar(3.55,a,F+.9);const top=box(.73,.06,.62,p[0],p[1],p[2],M.amber);top.rotation.y=a;const c=polar(3.62,a,F+.42);const cab=box(.7,.84,.5,c[0],c[1],c[2],M.panel);cab.rotation.y=a;const h=polar(3.67,a,F+.62);const handle=box(.4,.03,.03,...polar(3.36,a,F+.7),M.dark);handle.rotation.y=a}
-for(let i=0;i<3;i++){const a=Math.PI-.7+i*.7,p=polar(4.03,a,F+1.52);const hatch=box(.6,.64,.035,p[0],p[1],p[2],M.dark);hatch.rotation.y=a}
-label('CONTROL DECK',0,F+2.45,3.3,.55);
+// Airlocks, garage, Deck B rooms, control deck furniture and berths (see src/interior.js).
+const interior=buildInterior({D,M,groups,box,rod,mesh,tube,beam,label,polar,solids,renderer});
+M.lining.map=interior.panelMap;M.lining.needsUpdate=true;
 // A short, explicitly non-deck docking access ladder in the upper void.
 const topDeck=D.decks.value[3];
 // Inclined ladder: foot on the Deck D floor outside the stair opening, head inside the docking tunnel.
@@ -382,12 +381,13 @@ const topDeck=D.decks.value[3];
 
 // Astronauts: NASA Z2 planetary spacesuit (NASA 3D Resources), scaled to a 1.85 m suited height.
 // One stands outside the footpads as the scale reference; two wait at the lift's ground station.
+const astronauts=[];
 const draco=new DRACOLoader().setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
 new GLTFLoader().setDRACOLoader(draco).load(`${import.meta.env.BASE_URL}models/nasa-z2-spacesuit.glb`,gltf=>{
   const base=gltf.scene;base.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;if(o.material){o.material.envMapIntensity=.8}}});
   const box=new THREE.Box3().setFromObject(base),size=box.getSize(new THREE.Vector3()),scale=1.85/size.y;
   base.scale.setScalar(scale);base.position.set(-(box.min.x+box.max.x)/2*scale,-box.min.y*scale,-(box.min.z+box.max.z)/2*scale);
-  for(const [x,z,ry] of [[10,7,-.9],[-.55,-5.2,Math.PI*.95],[.6,-5.75,Math.PI*1.1]]){const holder=new THREE.Group();holder.add(base.clone());holder.position.set(x,Math.max(0,lunar.heightAt(x,z))+(Math.hypot(x,z)<7?.13:0),z);holder.rotation.y=ry;scene.add(holder)}
+  for(const [x,z,ry] of [[10,7,-.9],[-.55,-5.2,Math.PI*.95],[.6,-5.75,Math.PI*1.1]]){const holder=new THREE.Group();holder.add(base.clone());holder.position.set(x,Math.max(0,lunar.heightAt(x,z))+(Math.hypot(x,z)<7?.13:0),z);holder.rotation.y=ry;holder.userData.atLift=Math.hypot(x,z)<7;astronauts.push(holder);scene.add(holder)}
 });
 label('1.8 m human',10,2.4,7,.72);
 const capsule=mesh(new THREE.CapsuleGeometry(.3,1.2,8,16),new THREE.MeshBasicMaterial({color:'#58d7ee',transparent:true,opacity:.32,depthWrite:false}),groups.debug,0,36,2.6);
@@ -424,10 +424,48 @@ $('.mobile-menu').onclick=()=>$('.sidebar').classList.toggle('open');
 document.querySelectorAll('.preset,#shell-mode button').forEach(b=>b.addEventListener('click',()=>$('.sidebar').classList.remove('open')));
 setMode('exterior');
 if(import.meta.env.DEV)window.__view={camera,orbit,THREE,scene};
+// ---------- First-person mode (desktop only)
+function isUnder(o,ancestor){for(let p=o;p;p=p.parent)if(p===ancestor)return true;return false}
+function buildCollisionOctree(){
+  scene.updateMatrixWorld(true);
+  // Octree triangles only push from their front side, so open surfaces (shell, rails, ramps) get a reversed twin.
+  const flipped=geo=>{const g=geo.index?geo.toNonIndexed():geo.clone(),p=g.attributes.position;for(let i=0;i<p.count;i+=3){const x=p.getX(i+1),y=p.getY(i+1),z=p.getZ(i+1);p.setXYZ(i+1,p.getX(i+2),p.getY(i+2),p.getZ(i+2));p.setXYZ(i+2,x,y,z)}return g};
+  const root=new THREE.Group(),add=(geo,matrix,twoSided=true)=>{for(const g of twoSided?[geo,flipped(geo)]:[geo]){const m=new THREE.Mesh(g);m.matrixAutoUpdate=false;m.matrix.copy(matrix);root.add(m)}};
+  for(const {mesh,w,h,d} of solids){if(isUnder(mesh,liftCar)||Math.min(w,h,d)<.025)continue;add(new THREE.BoxGeometry(w,h,d),mesh.matrixWorld,false)}
+  const shell=o=>o.geometry.type==='CylinderGeometry'&&o.geometry.parameters.openEnded&&o.geometry.parameters.radiusTop>=4;
+  const take=(g,test)=>g.traverse(o=>{if(o.isMesh&&!o.isInstancedMesh&&!isUnder(o,liftCar)&&test(o))add(o.geometry,o.matrixWorld)});
+  for(const g of [groups.shellFront,groups.shellBack,groups.innerFront])take(g,shell);
+  take(groups.interior,o=>shell(o)||o.userData.collider);
+  take(groups.hardware,o=>(o.geometry.type==='CylinderGeometry'&&o.geometry.parameters.radiusTop>=.5)||o.geometry.type==='LatheGeometry');
+  take(groups.noseFront,()=>true);take(groups.noseBack,()=>true);
+  for(const o of extraColliders)add(o.geometry,o.matrixWorld);
+  return new Octree().fromGraphNode(root);
+}
+const canWalk=matchMedia('(hover: hover) and (pointer: fine)').matches;
+const hud=$('.fp-hud');
+const fp=createFirstPerson({camera,domElement:renderer.domElement,buildOctree:buildCollisionOctree,heightAt:(x,z)=>lunar.heightAt(x,z),lift,interactables,
+  ui:{setLocked:on=>$('#fp-help').classList.toggle('show',!on),setPrompt:html=>{$('#fp-prompt').innerHTML=html;$('#fp-prompt').classList.toggle('show',!!html)}}});
+function enterFirstPerson(){
+  targetCamera=null;orbit.enabled=false;app.classList.add('fp');hud.hidden=false;
+  setMode('exterior');groups.innerFront.visible=true;groups.labels.visible=false;groups.detailLabels.visible=false;groups.guides.visible=false;groups.debug.visible=false;
+  for(const a of astronauts)if(a.userData.atLift)a.visible=false;
+  camera.fov=70;camera.updateProjectionMatrix();
+  fp.enter(new THREE.Vector3(3.2,0,-12),new THREE.Vector3(0,3,-5.45));
+}
+function exitFirstPerson(){
+  fp.exit();app.classList.remove('fp');hud.hidden=true;orbit.enabled=true;
+  for(const a of astronauts)a.visible=true;
+  camera.fov=45;camera.updateProjectionMatrix();
+  setToggle('guides',$('[data-toggle="guides"]').classList.contains('on'));setToggle('debug',$('[data-toggle="debug"]').classList.contains('on'));
+  setPreset(0);
+}
+if(canWalk)$('#walk-btn').onclick=enterFirstPerson;else $('#walk-btn').remove();
+$('#fp-exit').onclick=exitFirstPerson;
+if(import.meta.env.DEV)Object.assign(window.__view,{fp,lift,enterFirstPerson,exitFirstPerson,interactables});
 // Post-processing: GTAO grounds furniture, seams and leg bays; OutputPass applies tone mapping and sRGB.
 const composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));
-const gtao=new GTAOPass(scene,camera,1,1);gtao.updateGtaoMaterial({radius:.6,distanceExponent:1.4,thickness:1.2,scale:1.1,samples:16});gtao.updatePdMaterial({lumaPhi:10,depthPhi:2,normalPhi:3,radius:6,rings:2,samples:16});gtao.blendIntensity=.9;composer.addPass(gtao);
+const gtao=new GTAOPass(scene,camera,1,1);gtao.updateGtaoMaterial({radius:.6,distanceExponent:1.4,thickness:1.2,scale:1.1,samples:16});gtao.updatePdMaterial({lumaPhi:10,depthPhi:2,normalPhi:3,radius:6,rings:2,samples:16});gtao.blendIntensity=.9;gtao.normalMaterial.side=THREE.DoubleSide;composer.addPass(gtao);
 composer.addPass(new OutputPass());
 function resize(){const w=viewport.clientWidth,h=viewport.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h);composer.setPixelRatio(Math.min(devicePixelRatio,1.5));composer.setSize(w,h)}
 new ResizeObserver(resize).observe(viewport);resize();
-const clock=new THREE.Clock();function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);if(targetCamera){const f=1-Math.exp(-dt*4);camera.position.lerp(targetCamera.position,f);orbit.target.lerp(targetCamera.target,f);if(camera.position.distanceTo(targetCamera.position)<.01&&orbit.target.distanceTo(targetCamera.target)<.01)targetCamera=null}orbit.update();if(camera.position.y<.5){camera.position.y=.5}groups.detailLabels.visible=shellMode!=='exterior'&&groups.labels.visible&&camera.position.distanceTo(orbit.target)<24;{const decks=D.decks.value;let base=decks[0];for(const y of decks)if(orbit.target.y>=y-.6)base=y;for(const l of groups.detailLabels.children)l.visible=l.position.y>=base-.2&&l.position.y<base+D.deckSpacing.value-.05}composer.render();renderer.autoClear=false;renderer.clearDepth();renderer.render(overlay,camera);renderer.autoClear=true}animate();
+const clock=new THREE.Clock();function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);lift.update(dt);if(fp.active){fp.update(dt)}else{if(targetCamera){const f=1-Math.exp(-dt*4);camera.position.lerp(targetCamera.position,f);orbit.target.lerp(targetCamera.target,f);if(camera.position.distanceTo(targetCamera.position)<.01&&orbit.target.distanceTo(targetCamera.target)<.01)targetCamera=null}orbit.update();if(camera.position.y<.5){camera.position.y=.5}}groups.detailLabels.visible=!fp.active&&shellMode!=='exterior'&&groups.labels.visible&&camera.position.distanceTo(orbit.target)<24;{const decks=D.decks.value;let base=decks[0];for(const y of decks)if(orbit.target.y>=y-.6)base=y;for(const l of groups.detailLabels.children)l.visible=l.position.y>=base-.2&&l.position.y<base+D.deckSpacing.value-.05}composer.render();renderer.autoClear=false;renderer.clearDepth();renderer.render(overlay,camera);renderer.autoClear=true}animate();
