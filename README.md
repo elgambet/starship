@@ -1,5 +1,11 @@
 # Starship HLS: physical reference for a Three.js model
 
+> **About this project.** This is a personal, open-source project released under the [MIT License](LICENSE). It was built by directing two AI models, **GPT-5.6 Sol** (high reasoning) and **Claude Opus 5.5** (medium reasoning), and it makes no statement for or against using these tools. It is simply one person bringing together two passions: software and space.
+>
+> I did not write this code; I guided the models that did. Feel free to use, modify and share it however you like.
+>
+> The MIT License covers the code and documentation in this repository. The NASA model and texture, and the reference images in `research/`, keep their own terms (see *Third-party assets* and *Local visual references* below).
+
 ## Run the visual model
 
 ```bash
