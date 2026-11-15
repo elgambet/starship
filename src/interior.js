@@ -341,10 +341,11 @@ export function buildInterior(ctx) {
     rbox(.42, .5, .14, .45, H + 1.15, z - .1, MAT.seatShell, root, .03);
     for (const sx of [-.1, .1]) mesh(new THREE.CylinderGeometry(.015, .015, .06, 12), MAT.steel, root, .45 + sx, H + 1.04, z + .0);
     screen(.18, .1, MAT.dash, root, .45, H + 1.3, z - .02, 0, .01);
-    mesh(new THREE.CylinderGeometry(.06, .09, .9, 24), MAT.darkMetal, root, 0, H + .45, -2.35).castShadow = true;
-    proxy(.2, .9, .2, root, 0, H + .45, -2.35);
-    const table = mesh(extrude(roundedRectShape(1.1, .6, .2), .04, .01), MAT.wood, root, 0, H + .92, -2.35); table.rotation.x = -Math.PI / 2;
-    for (const sx of [-.45, .45]) { mesh(new THREE.CylinderGeometry(.18, .18, .07, 28), MAT.seatPad, root, sx, H + .5, -1.95); mesh(new THREE.CylinderGeometry(.03, .05, .46, 12), MAT.darkMetal, root, sx, H + .23, -1.95); }
+    // small pedestal table on the right of the stair arrival (the left lane must stay clear)
+    mesh(new THREE.CylinderGeometry(.06, .09, .9, 24), MAT.darkMetal, root, .75, H + .45, -2.35).castShadow = true;
+    proxy(.2, .9, .2, root, .75, H + .45, -2.35);
+    const table = mesh(extrude(roundedRectShape(.8, .5, .18), .04, .01), MAT.wood, root, .75, H + .92, -2.35); table.rotation.x = -Math.PI / 2;
+    mesh(new THREE.CylinderGeometry(.18, .18, .07, 28), MAT.seatPad, root, .75, H + .5, -1.85); mesh(new THREE.CylinderGeometry(.03, .05, .46, 12), MAT.darkMetal, root, .75, H + .23, -1.85);
     label('GALLEY', 0, H + 2.4, -3.0, .5);
   }
   // shared work table on the window side

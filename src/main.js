@@ -81,7 +81,7 @@ M.lining.onBeforeCompile=sh=>{worldVarying(sh);sh.fragmentShader=sh.fragmentShad
 M.floor.onBeforeCompile=sh=>{worldVarying(sh);sh.fragmentShader=sh.fragmentShader.replace('#include <map_fragment>',`#include <map_fragment>
   { vec2 fp=vWorldP.xz; float r=length(fp); float ang=atan(fp.x,fp.y); float seg=PI/6.;
     float k=floor(ang/seg); float local=ang-k*seg; float da=min(local,seg-local)*r;
-    float ring=min(min(abs(r-2.3),abs(r-3.3)),abs(r-1.62));
+    float ring=min(abs(r-2.3),abs(r-3.3));
     float diag=abs((local/seg)-(r-2.3)/1.0)*r*seg; diag=(r>2.3&&r<3.3)?diag:1.;
     float line=min(min(da,ring),diag);
     diffuseColor.rgb*=mix(.42,1.,smoothstep(.003,.011,line));
@@ -317,46 +317,53 @@ callPanel([2.7,1.15,-7.37],Math.PI,groups.hardware,()=>lift.moving?'Lift moving�
 callPanel([1.3,36.25,-4.2],Math.PI,groups.interior,()=>lift.moving?'Lift moving…':(lift.atTop?'Lift is here':'Call lift up'),()=>lift.go('top'));
 callPanel([.55,.95,-1.0],0,liftCar,()=>lift.moving?'Lift moving…':(lift.atTop?'Go down to the surface':'Go up to the garage'),()=>lift.go(lift.atTop?'bottom':'top'));
 
-// Annular slabs with a genuine central 3 m aperture. Each tread reaches the ring edge.
-function annularFloor(y,i){const shape=new THREE.Shape();shape.absarc(0,0,4.18,0,Math.PI*2,false);const hole=new THREE.Path();hole.absarc(0,.3,1.5,0,Math.PI*2,true);if(i>0)shape.holes.push(hole);const g=new THREE.ExtrudeGeometry(shape,{depth:D.floorThickness.value,bevelEnabled:false,curveSegments:96});g.rotateX(Math.PI/2);const o=mesh(g,M.floor,groups.interior,0,y,0);o.receiveShadow=true;o.userData.collider=true;if(i>0)torus(1.50,.055,y+.07,M.floorEdge,groups.interior);return o}
+// Vertical circulation after the SpaceX cabin render: steep straight "ship's ladder" stairs beside a central
+// storage core with numbered doors, not a spiral. Two 0.8 m lanes flank the core; flights alternate lanes and
+// direction (A→B left lane toward -Z, B→C right lane toward +Z, C→D left lane toward -Z). Each deck has a
+// rectangular opening only above the flight that arrives at it. Stair angle ≈ 50°, 13 risers of 0.223 m.
+const STAIR={core:.2,lane:.8,half:1.2,risers:13};
+const lanes={L:[-STAIR.core-STAIR.lane,-STAIR.core],R:[STAIR.core,STAIR.core+STAIR.lane]};
+const flights=[{lane:'L',dir:-1},{lane:'R',dir:1},{lane:'L',dir:-1}];      // dir: horizontal travel along Z going up
+const holeFor=[null,flights[0],flights[1],flights[2]];                   // opening in deck k above flight k-1
+const CLEAR=D.deckSpacing.value-D.floorThickness.value;
+function annularFloor(y,i){const shape=new THREE.Shape();shape.absarc(0,0,4.18,0,Math.PI*2,false);const f=holeFor[i];
+  if(f){const [x0,x1]=lanes[f.lane],z0=-STAIR.half-.07,z1=STAIR.half+.07,hole=new THREE.Path();hole.moveTo(x0,-z0);hole.lineTo(x0,-z1);hole.lineTo(x1,-z1);hole.lineTo(x1,-z0);hole.closePath();shape.holes.push(hole)}
+  const g=new THREE.ExtrudeGeometry(shape,{depth:D.floorThickness.value,bevelEnabled:false,curveSegments:96});g.rotateX(Math.PI/2);const o=mesh(g,M.floor,groups.interior,0,y,0);o.receiveShadow=true;o.userData.collider=true;return o}
 D.decks.value.forEach(annularFloor);
 // Deck A garage opening in the -Z shell: bridge to external platform, with clear gate.
 box(2.5,.12,.65,0,35.04,-4.43,M.floor,groups.interior);
-// The 54 treads form three one-turn flights. A landable walking line is radius ~1.0 m.
-const stairCx=0,stairCz=.3,innerR=.43,outerR=1.47,steps=18;
-function stairTread(y,a0,a1){const s=new THREE.Shape();const p1=polar(innerR,a0,0,stairCx,stairCz),p2=polar(outerR,a0,0,stairCx,stairCz),p3=polar(outerR,a1,0,stairCx,stairCz),p4=polar(innerR,a1,0,stairCx,stairCz);s.moveTo(p1[0],p1[2]);s.lineTo(p2[0],p2[2]);for(let k=1;k<=4;k++){const p=polar(outerR,a0+(a1-a0)*k/4,0,stairCx,stairCz);s.lineTo(p[0],p[2])}s.lineTo(p4[0],p4[2]);for(let k=3;k>=0;k--){const p=polar(innerR,a0+(a1-a0)*k/4,0,stairCx,stairCz);s.lineTo(p[0],p[2])}s.closePath();const g=new THREE.ExtrudeGeometry(s,{depth:.06,bevelEnabled:true,bevelThickness:.01,bevelSize:.01,bevelSegments:1,curveSegments:4});g.rotateX(Math.PI/2);const o=mesh(g,M.tread,groups.interior,0,y,0);o.receiveShadow=true;o.castShadow=true}
-// The stair foot and every landing portal face +Z (window side), where all four decks have clear floor.
-const stairStart=0;
 const stairRail=new THREE.MeshPhysicalMaterial({color:'#d3d8db',roughness:.16,metalness:1,clearcoat:.3});
-const railR=1.38,railH=.92,rise=D.deckSpacing.value/steps;
-for(let flight=0;flight<3;flight++){const base=D.decks.value[flight];const railPts=[];
-  for(let i=0;i<steps;i++){const a0=stairStart+i*2*Math.PI/steps,a1=a0+2*Math.PI/steps,yt=base+(i+1)*rise,am=(a0+a1)/2;stairTread(yt,a0,a1);
-    if(i>=2&&i<steps-2&&i%2===0){const b=polar(railR,am,yt,stairCx,stairCz);flatPost(b,railH,am,stairRail)}}
-  for(let k=0;k<=48;k++){const t=2/steps+k/48*(1-4/steps),a=stairStart+t*2*Math.PI+Math.PI/steps,y=base+t*D.deckSpacing.value+rise*.5+railH;railPts.push(polar(railR,a,y,stairCx,stairCz))}
-  flatBar(railPts,.07,.018,stairRail)}
-// Central column carries the inner tread edge from Deck A to just above Deck D.
-{const col=mesh(new THREE.CylinderGeometry(innerR-.01,innerR-.01,D.decks.value[3]+1.05-D.decks.value[0],40),M.panel,groups.interior,stairCx,(D.decks.value[0]+D.decks.value[3]+1.05)/2,stairCz);col.castShadow=true;col.userData.collider=true}
-torus(innerR+.01,.025,D.decks.value[3]+1.05,stairRail,groups.interior,Math.PI*2,0,stairCx,stairCz);
-for(let flight=0;flight<3;flight++){
-  const vertices=[],indices=[];
-  for(let i=0;i<=72;i++){const t=i/72,a=stairStart+t*Math.PI*2,y=D.decks.value[flight]+t*D.deckSpacing.value;for(const r of [innerR,outerR])vertices.push(...polar(r,a,y,stairCx,stairCz));if(i<72){const n=i*2;indices.push(n,n+1,n+2,n+1,n+3,n+2)}}
-  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));g.setIndex(indices);g.computeVertexNormals();
-  const ramp=mesh(g,new THREE.MeshBasicMaterial({visible:false,side:THREE.DoubleSide}),groups.interior);
-  ramp.userData={collider:true,collisionSurface:true,flight:flight+1,visibility:'debug-only'};
-}
-// Floor-edge guarding around each opening leaves a landing portal at +Z where the stair arrives and departs.
-// Deck D has no flight above it, so its portal opens only onto the arriving flight and a radial rail closes the rest.
-function colliderSegment(r,y0,y1,a0,a1,cx=0,cz=.3){const o=new THREE.Mesh(new THREE.CylinderGeometry(r,r,y1-y0,Math.max(4,Math.ceil((a1-a0)*24)),1,true,a0,a1-a0));o.position.set(cx,(y0+y1)/2,cz);o.updateMatrixWorld();extraColliders.push(o);return o}
+const stairMetal=new THREE.MeshPhysicalMaterial({color:'#2a2f33',roughness:.45,metalness:.7});
 function colliderStrip(points,bottom,top){const pos=[],idx=[];points.forEach((p,i)=>{pos.push(p[0],p[1]+bottom,p[2],p[0],p[1]+top,p[2]);if(i){const n=i*2;idx.push(n-2,n-1,n,n-1,n+1,n)}});const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));g.setIndex(idx);const o=new THREE.Mesh(g);o.updateMatrixWorld();extraColliders.push(o);return o}
-{const guardR=1.58;
-  for(const [di,y] of D.decks.value.entries()){if(di===0)continue;
-    const top=di===3,a0=stairStart+(top?.02:.4),a1=stairStart+Math.PI*2-(top?.55:.4);
-    for(const h of [1.0,.52]){const pts=[];for(let k=0;k<=64;k++){const a=a0+(a1-a0)*k/64;pts.push(polar(guardR,a,y+h,0,.3))}flatBar(pts,h>.9?.075:.035,.018,stairRail)}
-    for(let k=0;k<=10;k++){const a=a0+(a1-a0)*k/10,b=polar(guardR,a,y,0,.3);flatPost(b,1.0,a,stairRail)}
-    colliderSegment(guardR,y,y+1.1,a0,a1);
-    if(top){const a=stairStart+.02,p0=polar(innerR,a,y,0,.3),p1=polar(guardR,a,y,0,.3);for(const h of [1.0,.52])rod([p0[0],y+h,p0[2]],[p1[0],y+h,p1[2]],h>.9?.03:.018,stairRail);rod([p0[0]*.5+p1[0]*.5,y,p0[2]*.5+p1[2]*.5],[p0[0]*.5+p1[0]*.5,y+1,p0[2]*.5+p1[2]*.5],.022,stairRail);colliderStrip([p0,p1],0,1.1)}}}
-// Stair outer edge: an invisible wall under the handrail stops walking off the flight.
-for(let flight=0;flight<3;flight++){const base=D.decks.value[flight],pts=[];for(let k=0;k<=48;k++){const t=2/steps+k/48*(1-4/steps),a=stairStart+t*2*Math.PI;pts.push(polar(railR+.04,a,base+t*D.deckSpacing.value,stairCx,stairCz))}colliderStrip(pts,-.2,1.1)}
+function colliderQuad(a,b,c,d){const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute([...a,...b,...c,...d],3));g.setIndex([0,1,2,0,2,3]);const o=new THREE.Mesh(g);o.userData.collider=true;o.updateMatrixWorld();extraColliders.push(o);return o}
+flights.forEach((f,k)=>{
+  const y0=D.decks.value[k],rise=D.deckSpacing.value/STAIR.risers,run=2*STAIR.half/STAIR.risers,[x0,x1]=lanes[f.lane],xc=(x0+x1)/2,outer=f.lane==='L'?x0:x1,inner=f.lane==='L'?x1:x0;
+  const zAt=i=>-f.dir*STAIR.half+f.dir*i*run;                               // z of riser i (0 = bottom edge)
+  // treads: dark grated steel with a bright nosing strip
+  for(let i=1;i<STAIR.risers;i++){const z=zAt(i)+f.dir*run*.5,y=y0+i*rise;box(STAIR.lane-.04,.04,run+.04,xc,y-.02,z,stairMetal);box(STAIR.lane-.04,.012,.025,xc,y+.002,zAt(i)+f.dir*.012,stairRail)}
+  // stringers on both sides
+  const sb=[0,y0-.08,zAt(0)],st=[0,y0+D.deckSpacing.value-.1,zAt(STAIR.risers)];
+  for(const x of [x0+.02,x1-.02])beam([x,sb[1],sb[2]],[x,st[1],st[2]],.04,.22,stairMetal);
+  // handrails: outer flat bar on posts, inner bar on brackets off the core
+  const railPts=[];for(let t=0;t<=1.0001;t+=.1)railPts.push([outer+(f.lane==='L'?.03:-.03),y0+.95+t*(D.deckSpacing.value),zAt(t*STAIR.risers)]);
+  flatBar(railPts,.07,.018,stairRail);for(const t of [.08,.5,.92]){const p=[outer+(f.lane==='L'?.03:-.03),y0+t*D.deckSpacing.value,zAt(t*STAIR.risers)];flatPost(p,.95,0,stairRail)}
+  tube([[inner+(f.lane==='L'?-.06:.06),y0+.9,zAt(0)],[inner+(f.lane==='L'?-.06:.06),y0+.9+D.deckSpacing.value,zAt(STAIR.risers)]],.02,stairRail);
+  // walkable collision ramp across the lane, and an invisible wall under the outer handrail
+  const zb=zAt(0),zt=zAt(STAIR.risers),yt=y0+D.deckSpacing.value;
+  colliderQuad([x0,y0,zb],[x1,y0,zb],[x1,yt,zt],[x0,yt,zt]);
+  colliderStrip([[outer,y0,zb],[outer,yt,zt]],-.2,1.1);
+});
+// central storage core (numbered doors on its Z faces, as in the render) for decks A-C
+{const num=n=>{const c=document.createElement('canvas');c.width=128;c.height=64;const g=c.getContext('2d');g.fillStyle='#202427';g.fillRect(0,0,128,64);g.fillStyle='#8f9699';g.font='600 34px Space Grotesk, sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText(String(n).padStart(2,'0'),64,34);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;return t};
+  let n=1;for(let k=0;k<3;k++){const y=D.decks.value[k];box(STAIR.core*2,CLEAR,2*STAIR.half+.12,0,y+CLEAR/2,0,stairMetal);
+    for(const zs of [-1,1])for(let r=0;r<2;r++){const yy=y+.62+r*1.1;box(.36,1.0,.02,0,yy,zs*(STAIR.half+.07),M.dark);box(.18,.015,.02,0,yy-.25,zs*(STAIR.half+.085),M.rail);const lab=mesh(new THREE.PlaneGeometry(.12,.06),new THREE.MeshStandardMaterial({map:num(n),roughness:.6}),groups.interior,0,yy+.38,zs*(STAIR.half+.082));if(zs<0)lab.rotation.y=Math.PI;n+=2}}}
+// guard rails around each deck opening: outer long side + the far end (above the flight's foot);
+// on Deck D the core is absent, so the inner side gets a rail too
+D.decks.value.forEach((y,k)=>{const f=holeFor[k];if(!f)return;const [x0,x1]=lanes[f.lane],outer=f.lane==='L'?x0-.05:x1+.05,inner=f.lane==='L'?x1+.05:x0-.05,zFoot=-f.dir*(STAIR.half+.1),zTop=f.dir*(STAIR.half+.1);
+  const sides=[[[outer,zTop],[outer,zFoot]],[[outer,zFoot],[inner,zFoot]]];if(k===3)sides.push([[inner,zFoot],[inner,zTop]]);
+  for(const [[ax,az],[bx,bz]] of sides){for(const h of [1.0,.52])flatBar([[ax,y+h,az],[(ax+bx)/2,y+h,(az+bz)/2],[bx,y+h,bz]],h>.9?.075:.035,.018,stairRail);
+    const len=Math.hypot(bx-ax,bz-az),n=Math.max(1,Math.round(len/.8));for(let i=0;i<=n;i++)flatPost([ax+(bx-ax)*i/n,y,az+(bz-az)*i/n],1.0,Math.atan2(bx-ax,bz-az)+Math.PI/2,stairRail);
+    colliderStrip([[ax,y,az],[bx,y,bz]],0,1.1)}});
 
 // Window-side upper room shell seams, light bands and readable deck markers.
 for(const y of D.decks.value){const top=Math.min(y+2.65,BAND1-.1),inNose=y>=BAND1-.2,lightY=inNose?y+2.2:top,lr=Math.min(4.11,noseRadiusAt(lightY)-.18);if(!inNose)for(let i=0;i<14;i++){const a=i*2*Math.PI/14,p=polar(4.15,a);if(y<36&&inGate(a))continue;rod([p[0],y+.24,p[2]],[p[0],top,p[2]],.012,M.panel,Math.cos(a)>0?groups.innerFront:groups.interior)}for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p0=polar(lr,a,lightY),p1=polar(lr,a+2*Math.PI/32,lightY);rod(p0,p1,.016,M.light,Math.cos(a+Math.PI/32)>0?groups.innerFront:groups.interior)} }
@@ -368,10 +375,10 @@ const interior=buildInterior({D,M,groups,box,rod,mesh,tube,beam,label,polar,soli
 M.lining.map=interior.panelMap;M.lining.needsUpdate=true;
 // A short, explicitly non-deck docking access ladder in the upper void.
 const topDeck=D.decks.value[3];
-// Inclined ladder: foot on the Deck D floor outside the stair opening, head inside the docking tunnel.
-{const foot=new THREE.Vector3(0,topDeck,-1.95),head=new THREE.Vector3(0,49.55,-.45);
-  for(const x of [-.36,.36])rod([x,foot.y,foot.z],[x,head.y,head.z],.04,M.frame);
-  for(let k=1;k<18;k++){const p=foot.clone().lerp(head,k/18);rod([-.36,p.y,p.z],[.36,p.y,p.z],.022,M.frame)}}
+// Inclined ladder: foot on the Deck D floor beside the stair opening, head inside the docking tunnel.
+{const cx=.32,foot=new THREE.Vector3(cx,topDeck,1.0),head=new THREE.Vector3(cx,49.55,-.15);
+  for(const x of [cx-.34,cx+.34])rod([x,foot.y,foot.z],[x,head.y,head.z],.04,M.frame);
+  for(let k=1;k<18;k++){const p=foot.clone().lerp(head,k/18);rod([cx-.34,p.y,p.z],[cx+.34,p.y,p.z],.022,M.frame)}}
 // Docking tunnel: a closed white vestibule from the ladder head to the nose docking port.
 {const tunnelY0=49.3,tunnelY1=51.86;mesh(new THREE.CylinderGeometry(.78,.78,tunnelY1-tunnelY0,48,1,true),M.inner,groups.interior,0,(tunnelY0+tunnelY1)/2,0).receiveShadow=true;
   torus(.8,.06,tunnelY0,M.frame,groups.interior,Math.PI*2,0,0,0);
@@ -399,7 +406,7 @@ line([-4.5,33.7,6],[4.5,33.7,6]);for(const x of [-4.5,4.5])line([x,33.45,6],[x,3
 line([-8,0,-5.6],[-8,35.1,-5.6]);label('35.1 m LIFT',-9.9,17.55,-5.6,.6,'#b9f1ff',groups.guides);
 
 // Simple route landmarks make the future avatar path explicit in model data.
-scene.userData.navigation={unit:'metre',avatar:{height:1.8,radius:.3},decks:D.decks.value,stair:{center:D.stairCenter.value,innerRadius:innerR,outerRadius:outerR,risersPerFlight:18},hatches:{clearWidth:1.2,clearHeight:2.15,open:true},airlocks:[{center:[-2.55,0],clearSize:[2,2.83,2.3]},{center:[2.55,0],clearSize:[2,2.83,2.3]}],lift:{upperY:35.1,platform:[2.6,2.2]},route:['surface','lift','garage','either outer hatch','separate airlock','inner hatch','Deck A hall','spiral stair','Deck B ring','Deck C ring','Deck D ring']};
+scene.userData.navigation={unit:'metre',avatar:{height:1.8,radius:.3},decks:D.decks.value,stair:{type:'straight',lanes,flights,risersPerFlight:STAIR.risers,riser:D.deckSpacing.value/STAIR.risers,run:2*STAIR.half/STAIR.risers},hatches:{clearWidth:1.2,clearHeight:2.15,open:true},airlocks:[{center:[-2.55,0],clearSize:[2,2.83,2.3]},{center:[2.55,0],clearSize:[2,2.83,2.3]}],lift:{upperY:35.1,platform:[2.6,2.2]},route:['surface','lift','garage','either outer hatch','separate airlock','inner hatch','Deck A hall','straight stairs','Deck B ring','Deck C ring','Deck D ring']};
 
 const presets=[
   ['Full ship','Exterior','exterior',[24,9,64],[0,25,0],'Complete 52 m silhouette, four landing legs and the upper lift.'],
@@ -409,7 +416,7 @@ const presets=[
   ['Deck C','Control','cutaway',[14,45,18],[0,41.9,0],'Four observed seat positions facing individual windows.'],
   ['Deck D','Habitation','cutaway',[12,48.5,15],[0,44.8,0],'Four berth pods and a compact galley under the nose.'],
   ['Lift','Garage','cutaway',[12,39,-16],[0,35,-4.5],'Lift upper station aligns with the Deck A garage floor.'],
-  ['Top plan','Debug','cutaway',[.01,61,0],[0,41.5,0],'Inspect annular walkways and the open stair aperture.']
+  ['Top plan','Debug','cutaway',[.01,61,0],[0,41.5,0],'Inspect deck layout, the stair core and the straight stair openings.']
 ];
 const presetList=$('#presets');presets.forEach((p,i)=>{const b=document.createElement('button');b.className='preset'+(i===0?' active':'');b.innerHTML=`<span>${p[0]}</span><small>${p[1]}</small>`;b.onclick=()=>setPreset(i);presetList.append(b)});
 let shellMode='exterior',targetCamera=null;
@@ -461,7 +468,7 @@ function exitFirstPerson(){
 }
 if(canWalk)$('#walk-btn').onclick=enterFirstPerson;else $('#walk-btn').remove();
 $('#fp-exit').onclick=exitFirstPerson;
-if(import.meta.env.DEV)Object.assign(window.__view,{fp,lift,enterFirstPerson,exitFirstPerson,interactables});
+if(import.meta.env.DEV)Object.assign(window.__view,{fp,lift,enterFirstPerson,exitFirstPerson,interactables,renderOnce:()=>{composer.render();renderer.autoClear=false;renderer.clearDepth();renderer.render(overlay,camera);renderer.autoClear=true}});
 // Post-processing: GTAO grounds furniture, seams and leg bays; OutputPass applies tone mapping and sRGB.
 const composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));
 const gtao=new GTAOPass(scene,camera,1,1);gtao.updateGtaoMaterial({radius:.6,distanceExponent:1.4,thickness:1.2,scale:1.1,samples:16});gtao.updatePdMaterial({lumaPhi:10,depthPhi:2,normalPhi:3,radius:6,rings:2,samples:16});gtao.blendIntensity=.9;gtao.normalMaterial.side=THREE.DoubleSide;composer.addPass(gtao);
