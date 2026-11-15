@@ -13,7 +13,7 @@ const SNAP = 0.32;           // max step-down snap when walking off ledges/stair
 const REACH = 2.4;           // interaction distance (m)
 const WORLD_LIMIT = 140;     // keep the walker on the detailed terrain patch
 
-export function createFirstPerson({ camera, domElement, buildOctree, heightAt, lift, interactables, onExitRequest, ui }) {
+export function createFirstPerson({ camera, domElement, buildOctree, heightAt, lift, interactables, onExitRequest, ui, touchUI = null }) {
   const controls = new PointerLockControls(camera, domElement);
   controls.pointerSpeed = 0.9;
   const capsule = new Capsule(new THREE.Vector3(), new THREE.Vector3(), RADIUS);
@@ -21,6 +21,36 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
   const keys = new Set();
   const ray = new THREE.Raycaster();
   let octree = null, active = false, onFloor = false, focused = null;
+  // Touch input (phones/tablets): left virtual stick moves, dragging anywhere else looks, USE and RUN buttons.
+  const touch = { enabled: !!touchUI, stick: new THREE.Vector2(), stickId: null, lookId: null, last: new THREE.Vector2(), run: false };
+  const euler = new THREE.Euler(0, 0, 0, 'YXZ'), LOOK_SPEED = 0.0055;
+  if (touchUI) {
+    // Mobile-game layout (landscape): a floating thumbstick appears wherever the left thumb lands on the
+    // left half of the screen; the right half is a drag-to-look surface; action buttons sit bottom-right.
+    const { zone, stick, knob, useButton, runButton } = touchUI, STICK_R = 56;
+    const origin = new THREE.Vector2();
+    const setKnob = () => { knob.style.transform = `translate(${touch.stick.x * STICK_R}px, ${touch.stick.y * STICK_R}px)`; };
+    const stickFrom = e => { touch.stick.set((e.clientX - origin.x) / STICK_R, (e.clientY - origin.y) / STICK_R); if (touch.stick.length() > 1) touch.stick.normalize(); setKnob(); };
+    zone.addEventListener('pointerdown', e => {
+      if (!active || touch.stickId !== null) return;
+      touch.stickId = e.pointerId; zone.setPointerCapture(e.pointerId); origin.set(e.clientX, e.clientY);
+      const zr = zone.getBoundingClientRect(); stick.style.left = `${e.clientX - zr.left}px`; stick.style.top = `${e.clientY - zr.top}px`; stick.classList.add('active');
+      stickFrom(e); ui.touched?.(); e.preventDefault();
+    });
+    zone.addEventListener('pointermove', e => { if (e.pointerId === touch.stickId) stickFrom(e); });
+    const release = e => { if (e.pointerId !== touch.stickId) return; touch.stickId = null; touch.stick.set(0, 0); setKnob(); stick.classList.remove('active'); stick.style.left = stick.style.top = ''; };
+    zone.addEventListener('pointerup', release); zone.addEventListener('pointercancel', release);
+    domElement.addEventListener('pointerdown', e => { if (!active || e.pointerType === 'mouse' || touch.lookId !== null) return; touch.lookId = e.pointerId; touch.last.set(e.clientX, e.clientY); ui.touched?.(); });
+    addEventListener('pointermove', e => {
+      if (e.pointerId !== touch.lookId) return;
+      const dx = e.clientX - touch.last.x, dy = e.clientY - touch.last.y; touch.last.set(e.clientX, e.clientY);
+      euler.setFromQuaternion(camera.quaternion); euler.y -= dx * LOOK_SPEED; euler.x = THREE.MathUtils.clamp(euler.x - dy * LOOK_SPEED, -1.45, 1.45); camera.quaternion.setFromEuler(euler);
+    });
+    const endLook = e => { if (e.pointerId === touch.lookId) touch.lookId = null; };
+    addEventListener('pointerup', endLook); addEventListener('pointercancel', endLook);
+    useButton.addEventListener('pointerdown', e => { e.preventDefault(); use(); });
+    runButton.addEventListener('pointerdown', e => { e.preventDefault(); touch.run = !touch.run; runButton.classList.toggle('on', touch.run); });
+  }
 
   const feet = () => capsule.start.y - RADIUS;
   function placeFeet(x, y, z) { capsule.start.set(x, y + RADIUS, z); capsule.end.set(x, y + CAPSULE_TOP - RADIUS, z); }
@@ -34,7 +64,7 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
   addEventListener('keydown', e => onKey(e, true));
   addEventListener('keyup', e => onKey(e, false));
   addEventListener('blur', () => keys.clear());
-  domElement.addEventListener('click', () => { if (!active) return; if (!controls.isLocked) controls.lock(); else use(); });
+  domElement.addEventListener('click', e => { if (!active || touch.enabled) return; if (!controls.isLocked) controls.lock(); else use(); });
   controls.addEventListener('lock', () => ui.setLocked(true));
   controls.addEventListener('unlock', () => { keys.clear(); ui.setLocked(false); });
 
@@ -46,9 +76,9 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
     placeFeet(spawn.x, spawn.y, spawn.z);
     camera.position.set(spawn.x, spawn.y + EYE, spawn.z);
     camera.lookAt(lookAt);
-    controls.lock();
+    if (touch.enabled) ui.setLocked(true); else controls.lock();
   }
-  function exit() { active = false; keys.clear(); if (controls.isLocked) controls.unlock(); ui.setPrompt(''); focused = null; }
+  function exit() { active = false; keys.clear(); touch.stick.set(0, 0); touch.stickId = touch.lookId = null; if (controls.isLocked) controls.unlock(); ui.setPrompt(''); focused = null; }
 
   const fwd = new THREE.Vector3(), right = new THREE.Vector3(), wish = new THREE.Vector3();
   const probe = new Capsule(new THREE.Vector3(), new THREE.Vector3(), RADIUS);
@@ -97,7 +127,9 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
     if (keys.has('KeyS') || keys.has('ArrowDown')) wish.sub(fwd);
     if (keys.has('KeyD') || keys.has('ArrowRight')) wish.add(right);
     if (keys.has('KeyA') || keys.has('ArrowLeft')) wish.sub(right);
-    if (wish.lengthSq() > 0) wish.normalize().multiplyScalar(keys.has('ShiftLeft') || keys.has('ShiftRight') ? RUN : WALK);
+    const running = keys.has('ShiftLeft') || keys.has('ShiftRight') || touch.run;
+    if (wish.lengthSq() > 0) wish.normalize().multiplyScalar(running ? RUN : WALK);
+    else if (touch.stick.lengthSq() > 0.01) { const m = Math.min(1, touch.stick.length()); wish.addScaledVector(fwd, -touch.stick.y).addScaledVector(right, touch.stick.x).normalize().multiplyScalar(m * (running ? RUN : WALK)); }
     const k = Math.min(1, (wasOnFloor ? 14 : 1.5) * dt);
     velocity.x += (wish.x - velocity.x) * k; velocity.z += (wish.z - velocity.z) * k;
     if (!wasOnFloor) velocity.y -= GRAVITY * dt; else velocity.y = Math.min(velocity.y, 0) - GRAVITY * dt;
@@ -131,7 +163,8 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
     const next = hits.length ? interactables.find(i => i.mesh === hits[0].object) : null;
     if (focused && focused !== next) focused.mesh.material.emissiveIntensity = 0.7;
     focused = next;
-    if (focused) { focused.mesh.material.emissiveIntensity = 2.4; ui.setPrompt(`<b>E</b> / click · ${typeof focused.label === 'function' ? focused.label() : focused.label}`); }
+    touchUI?.useButton.classList.toggle('ready', !!next);
+    if (focused) { focused.mesh.material.emissiveIntensity = 2.4; ui.setPrompt(`${touch.enabled ? '<b>USE</b>' : '<b>E</b> / click'} · ${typeof focused.label === 'function' ? focused.label() : focused.label}`); }
     else ui.setPrompt('');
   }
 

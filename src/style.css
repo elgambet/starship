@@ -20,3 +20,25 @@
 .fp-help.show{display:flex}
 .fp-help strong{font:600 15px 'Space Grotesk',sans-serif;color:#effaff;letter-spacing:.04em}
 .fp-help b{color:#8fe3f2}
+/* touch controls for first person (mobile-game layout, landscape) */
+.fp-touch{display:none}
+.fp-hud.touch .fp-touch{display:block}
+.fp-hud.touch .fp-cross{width:8px;height:8px;margin:-4px 0 0 -4px}
+.fp-exit{z-index:11}
+.fp-stickzone{pointer-events:auto;touch-action:none;position:absolute;left:0;bottom:0;width:50%;top:64px;z-index:1}
+.fp-stick{position:absolute;left:calc(96px + env(safe-area-inset-left));top:calc(100% - 96px - env(safe-area-inset-bottom));width:124px;height:124px;transform:translate(-50%,-50%);border-radius:50%;background:#0b1b2655;border:2px solid #8fe3f255;opacity:.55;transition:opacity .15s;pointer-events:none}
+.fp-stick.active{opacity:1;transition:none;border-color:#8fe3f2aa}
+.fp-knob{position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;background:#8fe3f2cc;box-shadow:0 2px 10px #0008}
+.fp-btn{pointer-events:auto;touch-action:none;position:absolute;z-index:2;border-radius:50%;border:2px solid #8fe3f2aa;background:#0b1b26aa;color:#e8feff;font:700 12px 'Space Grotesk',sans-serif;letter-spacing:.08em}
+.fp-use{right:calc(28px + env(safe-area-inset-right));bottom:calc(30px + env(safe-area-inset-bottom));width:82px;height:82px;opacity:.55}
+.fp-use.ready{opacity:1;background:#e2583ecc;border-color:#ffb3a3}
+.fp-run{right:calc(122px + env(safe-area-inset-right));bottom:calc(22px + env(safe-area-inset-bottom));width:56px;height:56px;font-size:10px}
+.fp-run.on{background:#8fe3f2;color:#06131a}
+.fp-hud.touch .fp-help{max-width:min(520px,80vw);text-align:center;font-size:11px;padding:14px 18px}
+.fp-rotate{display:none;position:absolute;inset:0;z-index:10;pointer-events:auto;background:#05090ef2;color:#e8feff;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;font-size:13px}
+.fp-rotate strong{font:600 18px 'Space Grotesk',sans-serif}
+.fp-rotate span{color:#9ab0c0}
+.fp-phone{width:46px;height:78px;border:3px solid #8fe3f2;border-radius:9px;animation:fp-turn 1.8s ease-in-out infinite}
+@keyframes fp-turn{0%,20%{transform:rotate(0)}55%,100%{transform:rotate(-90deg)}}
+@media (orientation: portrait){.fp-hud.touch .fp-rotate{display:flex}}
+@media(max-width:760px){.topbar .title{display:none}.top-actions{flex-wrap:wrap;justify-content:flex-end}}

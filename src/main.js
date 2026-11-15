@@ -26,7 +26,7 @@ app.innerHTML = `<button class="mobile-menu" aria-label="Open controls">☰</but
   <div class="group"><h2>Published scale</h2><div class="fact"><strong>52 m</strong><span class="badge">Published</span><label>Approximate vehicle height</label></div><div class="fact"><strong>9 m</strong><span class="badge">Published</span><label>Nominal hull diameter</label></div><div class="fact"><strong>35.1 m</strong><span class="badge">Published</span><label>Approximate elevator boarding height</label></div><div class="fact"><strong>2 × ~13 m³</strong><span class="badge">Published</span><label>Separate airlock volumes</label></div></div>
   <div class="group"><h2>Model interpretation</h2><p class="note"><span class="badge observed">Observed</span> motifs come from SpaceX and NASA images. <span class="badge estimated">Estimated</span> deck positions, stairs, rooms, windows and furniture form a connected concept layout. They are not released vehicle drawings.</p></div>
   <p class="note">Drag to orbit · scroll to zoom · right drag to pan<br/>WASD walking is planned for the next phase.</p>
-</aside><main class="viewport"><div class="topbar"><div class="title">CREWED LUNAR LANDER / SECTION STUDY</div><div class="top-actions"><button class="chip walk" id="walk-btn" title="Walk the ship in first person (desktop)">Walk in first person</button><button class="chip on" id="labels-chip" title="Toggle deck labels (L)">Labels</button><div class="status" id="view-status">EXTERIOR · FULL SHIP</div></div></div><div class="layer-tooltip" id="view-description">Orbit the complete vehicle, then choose Cutaway to inspect the four connected decks.</div><div class="fp-hud" hidden><button class="fp-exit" id="fp-exit">← Exit first person</button><div class="fp-cross"></div><div class="fp-prompt" id="fp-prompt"></div><div class="fp-help" id="fp-help"><strong>First person</strong><span>Click to look around</span><span><b>W A S D</b> move · <b>Shift</b> run</span><span><b>E</b> or click · use lift buttons</span><span><b>Esc</b> releases the mouse</span></div></div><div class="footer"><span>NASA / SpaceX public references · layout estimates marked</span><span class="compass">+Z WINDOW SIDE ↗</span></div></main>`;
+</aside><main class="viewport"><div class="topbar"><div class="title">CREWED LUNAR LANDER / SECTION STUDY</div><div class="top-actions"><button class="chip walk" id="walk-btn" title="Walk the ship in first person (desktop)">Walk in first person</button><button class="chip on" id="labels-chip" title="Toggle deck labels (L)">Labels</button><div class="status" id="view-status">EXTERIOR · FULL SHIP</div></div></div><div class="layer-tooltip" id="view-description">Orbit the complete vehicle, then choose Cutaway to inspect the four connected decks.</div><div class="fp-hud" hidden><button class="fp-exit" id="fp-exit">← Exit first person</button><div class="fp-cross"></div><div class="fp-prompt" id="fp-prompt"></div><div class="fp-help" id="fp-help"><strong>First person</strong><span>Click to look around</span><span><b>W A S D</b> move · <b>Shift</b> run</span><span><b>E</b> or click · use lift buttons</span><span><b>Esc</b> releases the mouse</span></div><div class="fp-touch"><div class="fp-stickzone" id="fp-stickzone"><div class="fp-stick" id="fp-stick"><div class="fp-knob" id="fp-knob"></div></div></div><button class="fp-btn fp-run" id="fp-run">RUN</button><button class="fp-btn fp-use" id="fp-use">USE</button></div><div class="fp-rotate"><div class="fp-phone"></div><strong>Rotate your phone</strong><span>First person is played in landscape</span></div></div><div class="footer"><span>NASA / SpaceX public references · layout estimates marked</span><span class="compass">+Z WINDOW SIDE ↗</span></div></main>`;
 
 const viewport = $('.viewport');
 const scene = new THREE.Scene();
@@ -448,19 +448,26 @@ function buildCollisionOctree(){
   for(const o of extraColliders)add(o.geometry,o.matrixWorld);
   return new Octree().fromGraphNode(root);
 }
-const canWalk=matchMedia('(hover: hover) and (pointer: fine)').matches;
+// Phones and tablets get on-screen controls; desktops use pointer lock + keyboard.
+const isTouch=matchMedia('(pointer: coarse)').matches&&!matchMedia('(hover: hover)').matches;
+const canWalk=isTouch||matchMedia('(hover: hover) and (pointer: fine)').matches;
+if(isTouch){$('.fp-hud').classList.add('touch');$('#fp-help').innerHTML='<strong>First person</strong><span><b>Left thumb</b> anywhere on the left half to move</span><span><b>Right thumb</b> drag on the right half to look</span><span><b>USE</b> presses the lift button you look at · <b>RUN</b> toggles running</span><span>Touch to start</span>';
+  sun.shadow.mapSize.set(2048,2048)}
 const hud=$('.fp-hud');
 const fp=createFirstPerson({camera,domElement:renderer.domElement,buildOctree:buildCollisionOctree,heightAt:(x,z)=>lunar.heightAt(x,z),lift,interactables,
-  ui:{setLocked:on=>$('#fp-help').classList.toggle('show',!on),setPrompt:html=>{$('#fp-prompt').innerHTML=html;$('#fp-prompt').classList.toggle('show',!!html)}}});
+  touchUI:isTouch?{zone:$('#fp-stickzone'),stick:$('#fp-stick'),knob:$('#fp-knob'),useButton:$('#fp-use'),runButton:$('#fp-run')}:null,
+  ui:{setLocked:on=>$('#fp-help').classList.toggle('show',!on),touched:()=>$('#fp-help').classList.remove('show'),setPrompt:html=>{$('#fp-prompt').innerHTML=html;$('#fp-prompt').classList.toggle('show',!!html)}}});
 function enterFirstPerson(){
   targetCamera=null;orbit.enabled=false;app.classList.add('fp');hud.hidden=false;
   setMode('exterior');groups.innerFront.visible=true;groups.labels.visible=false;groups.detailLabels.visible=false;groups.guides.visible=false;groups.debug.visible=false;
   for(const a of astronauts)if(a.userData.atLift)a.visible=false;
   camera.fov=70;camera.updateProjectionMatrix();
   fp.enter(new THREE.Vector3(3.2,0,-12),new THREE.Vector3(0,3,-5.45));
+  if(isTouch){$('#fp-help').classList.add('show');const root=document.documentElement;if(root.requestFullscreen&&!document.fullscreenElement)root.requestFullscreen({navigationUI:'hide'}).then(()=>screen.orientation?.lock?.('landscape')).catch(()=>{})}
 }
 function exitFirstPerson(){
   fp.exit();app.classList.remove('fp');hud.hidden=true;orbit.enabled=true;
+  if(document.fullscreenElement){screen.orientation?.unlock?.();document.exitFullscreen().catch(()=>{})}
   for(const a of astronauts)a.visible=true;
   camera.fov=45;camera.updateProjectionMatrix();
   setToggle('guides',$('[data-toggle="guides"]').classList.contains('on'));setToggle('debug',$('[data-toggle="debug"]').classList.contains('on'));
@@ -471,7 +478,7 @@ $('#fp-exit').onclick=exitFirstPerson;
 if(import.meta.env.DEV)Object.assign(window.__view,{fp,lift,enterFirstPerson,exitFirstPerson,interactables,renderOnce:()=>{composer.render();renderer.autoClear=false;renderer.clearDepth();renderer.render(overlay,camera);renderer.autoClear=true}});
 // Post-processing: GTAO grounds furniture, seams and leg bays; OutputPass applies tone mapping and sRGB.
 const composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));
-const gtao=new GTAOPass(scene,camera,1,1);gtao.updateGtaoMaterial({radius:.6,distanceExponent:1.4,thickness:1.2,scale:1.1,samples:16});gtao.updatePdMaterial({lumaPhi:10,depthPhi:2,normalPhi:3,radius:6,rings:2,samples:16});gtao.blendIntensity=.9;gtao.normalMaterial.side=THREE.DoubleSide;composer.addPass(gtao);
+const gtao=new GTAOPass(scene,camera,1,1);gtao.updateGtaoMaterial({radius:.6,distanceExponent:1.4,thickness:1.2,scale:1.1,samples:16});gtao.updatePdMaterial({lumaPhi:10,depthPhi:2,normalPhi:3,radius:6,rings:2,samples:16});gtao.blendIntensity=.9;gtao.normalMaterial.side=THREE.DoubleSide;if(isTouch)gtao.enabled=false;composer.addPass(gtao);
 composer.addPass(new OutputPass());
 function resize(){const w=viewport.clientWidth,h=viewport.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h);composer.setPixelRatio(Math.min(devicePixelRatio,1.5));composer.setSize(w,h)}
 new ResizeObserver(resize).observe(viewport);resize();
