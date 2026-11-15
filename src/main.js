@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { createLunarTerrain } from './terrain.js';
 import { dimensions as D, deckNames } from './dimensions.js';
 import './style.css';
 
@@ -15,13 +23,13 @@ app.innerHTML = `<button class="mobile-menu" aria-label="Open controls">☰</but
   <div class="group"><h2>Published scale</h2><div class="fact"><strong>52 m</strong><span class="badge">Published</span><label>Approximate vehicle height</label></div><div class="fact"><strong>9 m</strong><span class="badge">Published</span><label>Nominal hull diameter</label></div><div class="fact"><strong>35.1 m</strong><span class="badge">Published</span><label>Approximate elevator boarding height</label></div><div class="fact"><strong>2 × ~13 m³</strong><span class="badge">Published</span><label>Separate airlock volumes</label></div></div>
   <div class="group"><h2>Model interpretation</h2><p class="note"><span class="badge observed">Observed</span> motifs come from SpaceX and NASA images. <span class="badge estimated">Estimated</span> deck positions, stairs, rooms, windows and furniture form a connected concept layout. They are not released vehicle drawings.</p></div>
   <p class="note">Drag to orbit · scroll to zoom · right drag to pan<br/>WASD walking is planned for the next phase.</p>
-</aside><main class="viewport"><div class="topbar"><div class="title">CREWED LUNAR LANDER / SECTION STUDY</div><div class="status" id="view-status">EXTERIOR · FULL SHIP</div></div><div class="layer-tooltip" id="view-description">Orbit the complete vehicle, then choose Cutaway to inspect the four connected decks.</div><div class="footer"><span>NASA / SpaceX public references · layout estimates marked</span><span class="compass">+Z WINDOW SIDE ↗</span></div></main>`;
+</aside><main class="viewport"><div class="topbar"><div class="title">CREWED LUNAR LANDER / SECTION STUDY</div><div class="top-actions"><button class="chip on" id="labels-chip" title="Toggle deck labels (L)">Labels</button><div class="status" id="view-status">EXTERIOR · FULL SHIP</div></div></div><div class="layer-tooltip" id="view-description">Orbit the complete vehicle, then choose Cutaway to inspect the four connected decks.</div><div class="footer"><span>NASA / SpaceX public references · layout estimates marked</span><span class="compass">+Z WINDOW SIDE ↗</span></div></main>`;
 
 const viewport = $('.viewport');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#010203');
-scene.fog = new THREE.FogExp2('#010203', 0.0022);
-const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 1000);
+scene.fog = new THREE.FogExp2('#010203', 0.0008);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 5000);
 camera.position.set(24, 9, 64);
 const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -45,18 +53,18 @@ orbit.maxPolarAngle = Math.PI * 0.93;
 // Airless lunar lighting: one hard sun, weak regolith bounce, no sky fill.
 scene.add(new THREE.HemisphereLight('#3a4350','#8a8d90', 0.55));
 const sun = new THREE.DirectionalLight('#fff6ea', 3.6);
-sun.position.set(-34,58,46); sun.castShadow=true;
+sun.position.set(-62,34,44); sun.castShadow=true;
 const rim = new THREE.DirectionalLight('#dfe8ff', 0.9);
 rim.position.set(30,40,-60); scene.add(rim);
-sun.shadow.mapSize.set(4096,4096); sun.shadow.camera.left=-32; sun.shadow.camera.right=32;
-sun.shadow.camera.top=62;sun.shadow.camera.bottom=-32;sun.shadow.camera.near=1;sun.shadow.camera.far=160;
+sun.shadow.mapSize.set(4096,4096); sun.shadow.camera.left=-45; sun.shadow.camera.right=45;
+sun.shadow.camera.top=60;sun.shadow.camera.bottom=-45;sun.shadow.camera.near=1;sun.shadow.camera.far=220;
 sun.shadow.bias=-0.00012;scene.add(sun);
 
 const mat = (color, roughness=.65, metalness=0) => new THREE.MeshStandardMaterial({color,roughness,metalness,side:THREE.DoubleSide});
 const M = {
   hull:new THREE.MeshPhysicalMaterial({color:'#e4e6e6',roughness:.36,metalness:.12,clearcoat:.55,clearcoatRoughness:.28,side:THREE.DoubleSide}),
   collar:new THREE.MeshPhysicalMaterial({color:'#161c22',roughness:.3,metalness:.6,clearcoat:.8,clearcoatRoughness:.12,side:THREE.DoubleSide}), inner:mat('#edf0ef',.72,.02), panel:mat('#d8dedf',.68,.07),
-  floor:mat('#272d32',.82,.08), floorEdge:mat('#657177',.55,.55), dark:mat('#151d25',.45,.35),
+  floor:mat('#272d32',.82,.08), tread:new THREE.MeshPhysicalMaterial({color:'#3b4248',roughness:.5,metalness:.45,clearcoat:.2,side:THREE.DoubleSide}), floorEdge:mat('#657177',.55,.55), dark:mat('#151d25',.45,.35),
   frame:mat('#8b9296',.32,.85), rail:mat('#b7c5c9',.38,.68), blue:mat('#28758a',.38,.32),
   amber:mat('#bd9d70',.72,.05), berth:mat('#c5c1b7',.92,.02), padding:mat('#e7e7e4',.83,.01),
   seat:mat('#434d55',.88,.03), glass:new THREE.MeshPhysicalMaterial({color:'#8ca6b0',roughness:.09,metalness:0,transmission:.67,thickness:.02,transparent:true,side:THREE.DoubleSide}),
@@ -64,16 +72,24 @@ const M = {
   screen:new THREE.MeshStandardMaterial({color:'#06141c',emissive:'#0b586b',emissiveIntensity:.65,roughness:.12})
 };
 const groups={shellFront:new THREE.Group(),shellBack:new THREE.Group(),noseFront:new THREE.Group(),noseBack:new THREE.Group(),innerFront:new THREE.Group(),windows:new THREE.Group(),decals:new THREE.Group(),interior:new THREE.Group(),labels:new THREE.Group(),detailLabels:new THREE.Group(),guides:new THREE.Group(),hardware:new THREE.Group(),debug:new THREE.Group()};
-Object.values(groups).forEach(g=>scene.add(g));
+// Labels and guides render in an overlay pass after post-processing so AO never smears them.
+const overlay=new THREE.Scene();
+for(const [k,g] of Object.entries(groups))(['labels','detailLabels','guides'].includes(k)?overlay:scene).add(g);
 groups.debug.visible=false;
 groups.guides.visible=false;
 function mesh(geo,material,parent=groups.interior,x=0,y=0,z=0){const o=new THREE.Mesh(geo,material);o.position.set(x,y,z);parent.add(o);return o}
-function box(w,h,d,x,y,z,material=M.panel,parent=groups.interior){const o=mesh(new THREE.BoxGeometry(w,h,d),material,parent,x,y,z);o.castShadow=true;o.receiveShadow=true;return o}
+const boxCache=new Map();
+function roundedBox(w,h,d){const key=`${w}|${h}|${d}`;if(!boxCache.has(key)){const r=Math.min(.035,Math.min(w,h,d)*.3);boxCache.set(key,r<.004?new THREE.BoxGeometry(w,h,d):new RoundedBoxGeometry(w,h,d,2,r))}return boxCache.get(key)}
+function box(w,h,d,x,y,z,material=M.panel,parent=groups.interior){const o=mesh(roundedBox(w,h,d),material,parent,x,y,z);o.castShadow=true;o.receiveShadow=true;return o}
+// Rectangular beam between two points (local Y along the beam).
+function beam(a,b,w,d,material,parent=groups.hardware){const av=new THREE.Vector3(...a),bv=new THREE.Vector3(...b);const o=mesh(new RoundedBoxGeometry(w,av.distanceTo(bv),d,2,Math.min(w,d)*.25),material,parent,...av.clone().add(bv).multiplyScalar(.5).toArray());o.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),bv.clone().sub(av).normalize());o.castShadow=true;o.receiveShadow=true;return o}
+// Smooth tube through a list of points (handrails).
+function tube(points,radius,material=M.rail,parent=groups.interior){const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));const o=mesh(new THREE.TubeGeometry(curve,Math.max(8,points.length*6),radius,8,false),material,parent);o.castShadow=true;return o}
 function rod(a,b,r,material=M.frame,parent=groups.interior){const av=new THREE.Vector3(...a),bv=new THREE.Vector3(...b);const o=mesh(new THREE.CylinderGeometry(r,r,av.distanceTo(bv),10),material,parent,...av.clone().add(bv).multiplyScalar(.5).toArray());o.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),bv.sub(av).normalize());o.castShadow=true;return o}
 function torus(radius,tube,y,material=M.rail,parent=groups.interior,arc=Math.PI*2,start=0,cx=0,cz=.3){const o=mesh(new THREE.TorusGeometry(radius,tube,7,96,arc),material,parent,cx,y,cz);o.rotation.x=Math.PI/2;o.rotation.z=start;return o}
 function polar(radius,angle,y=0,cx=0,cz=0){return [cx+Math.sin(angle)*radius,y,cz+Math.cos(angle)*radius]}
 function segment(radius,y0,y1,a0,a1,material,parent){const o=mesh(new THREE.CylinderGeometry(radius,radius,y1-y0,Math.max(2,Math.ceil((a1-a0)*32)),1,true,a0,a1-a0),material,parent,0,(y0+y1)/2,0);o.receiveShadow=true;return o}
-function label(text,x,y,z,scale=1,color='#d7f6fb',parent=groups.detailLabels){const c=document.createElement('canvas');c.width=512;c.height=96;const ctx=c.getContext('2d');ctx.fillStyle='#081924dd';ctx.fillRect(0,0,512,96);ctx.strokeStyle='#4b98aa';ctx.lineWidth=3;ctx.strokeRect(2,2,508,92);ctx.fillStyle=color;ctx.font='600 37px Space Grotesk, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,49,480);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;const o=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:true}));o.position.set(x,y,z);o.scale.set(4.2*scale,.79*scale,1);parent.add(o);return o}
+function label(text,x,y,z,scale=1,color='#d7f6fb',parent=groups.detailLabels){const c=document.createElement('canvas');c.width=512;c.height=96;const ctx=c.getContext('2d');ctx.fillStyle='#081924dd';ctx.fillRect(0,0,512,96);ctx.strokeStyle='#4b98aa';ctx.lineWidth=3;ctx.strokeRect(2,2,508,92);ctx.fillStyle=color;ctx.font='600 37px Space Grotesk, sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,49,480);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;const o=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:false,toneMapped:false}));o.position.set(x,y,z);o.scale.set(4.2*scale,.79*scale,1);parent.add(o);return o}
 function line(a,b,color='#84c0ce',opacity=.8,parent=groups.guides){const g=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a),new THREE.Vector3(...b)]);const o=new THREE.Line(g,new THREE.LineBasicMaterial({color,transparent:true,opacity,depthTest:false}));parent.add(o);return o}
 
 // Deterministic material maps, generated from code rather than the reference screenshots.
@@ -81,7 +97,6 @@ let seed=20261115;function random(){seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.im
 function canvasTexture(draw,size=512,repeat=[1,1]){const c=document.createElement('canvas');c.width=c.height=size;draw(c.getContext('2d'),size);const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.SRGBColorSpace;t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(...repeat);t.anisotropy=8;return t}
 function noiseHash(x,y){let h=Math.imul(x,374761393)^Math.imul(y,668265263)^20261115;h=Math.imul(h^(h>>>13),1274126177);return ((h^(h>>>16))>>>0)/4294967295}
 function tileNoise(u,v,period){const x=u*period,y=v*period,ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy,sx=fx*fx*(3-2*fx),sy=fy*fy*(3-2*fy),wrap=n=>(n+period)%period;const a=noiseHash(wrap(ix),wrap(iy)),b=noiseHash(wrap(ix+1),wrap(iy)),c=noiseHash(wrap(ix),wrap(iy+1)),d=noiseHash(wrap(ix+1),wrap(iy+1));return THREE.MathUtils.lerp(THREE.MathUtils.lerp(a,b,sx),THREE.MathUtils.lerp(c,d,sx),sy)}
-const groundTexture=canvasTexture((ctx,n)=>{const img=ctx.createImageData(n,n);for(let y=0;y<n;y++)for(let x=0;x<n;x++){const u=x/n,v=y/n,coarse=tileNoise(u,v,4),medium=tileNoise(u,v,16),fine=tileNoise(u,v,64),q=.52*coarse+.32*medium+.16*fine,shade=Math.round(98+q*48),index=(y*n+x)*4;img.data[index]=shade;img.data[index+1]=shade+2;img.data[index+2]=shade+3;img.data[index+3]=255}ctx.putImageData(img,0,0);for(let i=0;i<60;i++){const x=random()*n,y=random()*n,r=2+random()*9;const g=ctx.createRadialGradient(x+r*.25,y+r*.25,0,x,y,r);g.addColorStop(0,'rgba(40,42,44,.18)');g.addColorStop(.75,'rgba(60,62,64,.08)');g.addColorStop(1,'rgba(220,220,215,.10)');ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill()}},512,[12,12]);
 const floorTexture=canvasTexture((ctx,n)=>{ctx.fillStyle='#2b3034';ctx.fillRect(0,0,n,n);for(let i=0;i<6500;i++){const q=35+Math.floor(random()*20);ctx.fillStyle=`rgba(${q},${q+3},${q+5},.11)`;ctx.fillRect(random()*n,random()*n,1.5,1.5)}ctx.strokeStyle='#414a50';ctx.lineWidth=2;for(let v=0;v<=n;v+=n/4){ctx.beginPath();ctx.moveTo(v,0);ctx.lineTo(v,n);ctx.stroke();ctx.beginPath();ctx.moveTo(0,v);ctx.lineTo(n,v);ctx.stroke()}},512,[4,4]);
 M.floor.map=floorTexture;M.floor.needsUpdate=true;
 const hexTexture=canvasTexture((ctx,n)=>{ctx.fillStyle='#e5e5e1';ctx.fillRect(0,0,n,n);const step=76;for(let row=-1;row<Math.ceil(n/step)+1;row++)for(let col=-1;col<Math.ceil(n/step)+1;col++){const x=col*step+(row%2)*step/2,y=row*step*.85;ctx.beginPath();for(let k=0;k<6;k++){const a=Math.PI/3*k+Math.PI/6;const px=x+step*.48*Math.cos(a),py=y+step*.48*Math.sin(a);k?ctx.lineTo(px,py):ctx.moveTo(px,py)}ctx.closePath();ctx.fillStyle='#ecece8';ctx.fill();ctx.lineWidth=5;ctx.strokeStyle='#cdd1d0';ctx.stroke()}} ,512,[1,1]);
@@ -112,19 +127,12 @@ function hullCanvas(kind,n=1024){const c=document.createElement('canvas');c.widt
 const hullMaps={map:hullCanvas('color'),roughnessMap:hullCanvas('rough'),bumpMap:hullCanvas('bump')};
 // Returns a hull material whose maps repeat at true metric scale for a surface of the given size.
 function hullMaterial(circumference,height){const m=M.hull.clone();for(const k of Object.keys(hullMaps)){const t=hullMaps[k].clone();t.repeat.set(circumference/HULL_TILE_W,height/HULL_TILE_H);t.needsUpdate=true;m[k]=t}m.color.set('#ffffff');m.roughness=1;m.bumpScale=1.2;return m}
-const terrainGeometry=new THREE.PlaneGeometry(180,180,90,90);
-const terrainPositions=terrainGeometry.attributes.position;
-for(let i=0;i<terrainPositions.count;i++){const x=terrainPositions.getX(i),z=terrainPositions.getY(i),r=Math.hypot(x,z);const fade=THREE.MathUtils.smoothstep(r,14,48);const height=fade*(.8*Math.sin(x*.075)+.55*Math.cos(z*.1)+.35*Math.sin((x+z)*.12));terrainPositions.setZ(i,height)}
-terrainGeometry.computeVertexNormals();
-const terrain=mesh(terrainGeometry,new THREE.MeshStandardMaterial({map:groundTexture,roughness:1}),scene,0,-.08,0);terrain.rotation.x=-Math.PI/2;terrain.receiveShadow=true;
-for(let i=0;i<100;i++){const a=random()*Math.PI*2,r=12+random()*80,x=Math.sin(a)*r,z=Math.cos(a)*r;const stone=mesh(new THREE.DodecahedronGeometry(.08+random()*.35,0),mat(random()>.5?'#7a8080':'#697073',1),scene,x,.05,z);stone.scale.y=.3;stone.rotation.y=random()*6}
-for(let i=0;i<90;i++){const v=new THREE.Vector3((random()-.5)*500,random()*180+15,(random()-.5)*500);const star=mesh(new THREE.SphereGeometry(.035+random()*.06,4,4),new THREE.MeshBasicMaterial({color:'#d7e5ee'}),scene,...v.toArray())}
-const earthCanvas=document.createElement('canvas');earthCanvas.width=512;earthCanvas.height=256;
-const earthContext=earthCanvas.getContext('2d');earthContext.fillStyle='#1b4e79';earthContext.fillRect(0,0,512,256);
-for(let i=0;i<28;i++){const x=random()*512,y=40+random()*175;earthContext.fillStyle=random()>.5?'#759991':'#5f8080';earthContext.beginPath();earthContext.ellipse(x,y,8+random()*42,3+random()*18,random()*6,0,Math.PI*2);earthContext.fill()}
-for(let i=0;i<64;i++){const x=random()*512,y=random()*256;earthContext.fillStyle=`rgba(237,244,241,${.1+random()*.3})`;earthContext.beginPath();earthContext.ellipse(x,y,12+random()*48,2+random()*9,random()*6,0,Math.PI*2);earthContext.fill()}
-const earthTexture=new THREE.CanvasTexture(earthCanvas);earthTexture.colorSpace=THREE.SRGBColorSpace;
-mesh(new THREE.SphereGeometry(7,48,32),new THREE.MeshLambertMaterial({map:earthTexture,emissive:'#0a1626'}),scene,70,48,-150);
+const lunar=createLunarTerrain({anisotropy:renderer.capabilities.getMaxAnisotropy()});scene.add(lunar.group);
+for(let i=0;i<90;i++){const v=new THREE.Vector3((random()-.5)*500,random()*180+15,(random()-.5)*500);mesh(new THREE.SphereGeometry(.035+random()*.06,4,4),new THREE.MeshBasicMaterial({color:'#d7e5ee',fog:false}),scene,...v.toArray())}
+// Earth uses the NASA Blue Marble-derived texture shipped with the three.js examples (public domain imagery).
+const earthTexture=new THREE.TextureLoader().load(`${import.meta.env.BASE_URL}textures/earth-blue-marble-2048.jpg`);earthTexture.colorSpace=THREE.SRGBColorSpace;earthTexture.anisotropy=8;
+const earth=mesh(new THREE.SphereGeometry(16,96,64),new THREE.MeshStandardMaterial({map:earthTexture,roughness:.9,metalness:0,fog:false}),scene,170,118,-430);earth.rotation.set(.35,-1.9,.1);
+const earthAtmosphere=mesh(new THREE.SphereGeometry(16.6,64,48),new THREE.ShaderMaterial({transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,side:THREE.BackSide,fog:false,uniforms:{},vertexShader:'varying vec3 vN;varying vec3 vV;void main(){vec4 mv=modelViewMatrix*vec4(position,1.);vN=normalize(normalMatrix*normal);vV=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}',fragmentShader:'varying vec3 vN;varying vec3 vV;void main(){float f=pow(1.-abs(dot(vN,vV)),3.);gl_FragColor=vec4(.35,.6,1.,1.)*f*.9;}'}),scene,170,118,-430);
 
 // Whole white lower body; the dark band's front sector alone opens for the section view.
 const BAND0=D.bandBottom.value,NOSE=D.noseProfile.value,BAND1=NOSE.base;
@@ -155,7 +163,7 @@ const flagTexture=decalTexture((ctx,w,h)=>{const sh=h/13;for(let i=0;i<13;i++){c
   const star=(x,y,r)=>{ctx.beginPath();for(let k=0;k<10;k++){const a=-Math.PI/2+k*Math.PI/5,rr=k%2?r*.4:r;ctx.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr)}ctx.closePath();ctx.fill()};
   for(let row=0;row<9;row++){const n=row%2?5:6;for(let col=0;col<n;col++)star(cw*(row%2?2:1)/12+col*cw/6,ch*(row+1)/10,ch*.042)}},1024,540);
 const nasaTexture=decalTexture((ctx,w,h)=>{ctx.strokeStyle='#d5262d';ctx.lineWidth=h*.17;ctx.lineJoin='round';ctx.lineCap='butt';
-  const top=h*.16,bot=h*.9,lw=w/4.6,gap=w*.055;let x=w*.04;
+  const pad=h*.12,gap=w*.05,lw=(w-2*pad-3*gap)/4,top=h*.16,bot=h*.9;let x=pad;
   const arch=(x0,x1)=>{ctx.beginPath();ctx.moveTo(x0,bot);ctx.lineTo(x0,top+(x1-x0)*.5);ctx.quadraticCurveTo(x0,top,(x0+x1)/2,top);ctx.quadraticCurveTo(x1,top,x1,top+(x1-x0)*.5);ctx.lineTo(x1,bot);ctx.stroke()};
   // N: stem with a forward-leaning shoulder into the right stem
   ctx.beginPath();ctx.moveTo(x,bot);ctx.lineTo(x,top+lw*.35);ctx.quadraticCurveTo(x,top,x+lw*.3,top+lw*.2);ctx.lineTo(x+lw*.75,bot-lw*.25);ctx.quadraticCurveTo(x+lw,bot,x+lw,bot-lw*.35);ctx.lineTo(x+lw,top);ctx.stroke();x+=lw+gap;
@@ -176,34 +184,77 @@ mesh(new THREE.LatheGeometry(nosePoints,96,Math.PI/2,Math.PI),noseMaterial,group
 torus(.56,.06,51.9,M.frame,groups.hardware,Math.PI*2,0,0,0);
 // Band joints: protruding lips top and bottom, one mid ring and a row of vent holes along the bottom lip.
 const lipMat=new THREE.MeshPhysicalMaterial({color:'#2a3138',roughness:.35,metalness:.7,clearcoat:.6});
-for(const y of [BAND0+.04,BAND1-.04])torus(4.52,.05,y,lipMat,groups.hardware,Math.PI*2,0,0,0);
+// Band rings as front/back half-arcs so the front half disappears with the cut shell.
+function bandRing(r,y,radius,material){for(const [g,a0] of [[groups.shellFront,-Math.PI/2],[groups.shellBack,Math.PI/2]]){const pts=[];for(let k=0;k<=48;k++)pts.push(polar(r,a0+Math.PI*k/48,y));tube(pts,radius,material,g)}}
+for(const y of [BAND0+.04,BAND1-.04])bandRing(4.52,y,.05,lipMat);
 const collarSeam=mat('#3d4952',.5,.5);
-for(const y of [BAND0+.62,36.4,38.45,39.0,40.6,41.4,43.05])torus(4.506,.01,y,collarSeam,groups.hardware,Math.PI*2,0,0,0);
-torus(4.53,.07,38.95,lipMat,groups.hardware,Math.PI*2,0,0,0);
-for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p=polar(4.512,a);rod([p[0],BAND0+.65,p[2]],[p[0],BAND1-.08,p[2]],.007,collarSeam,groups.hardware)}
-{const holes=new THREE.InstancedMesh(new THREE.CircleGeometry(.1,16),mat('#8d969c',.5,.6),72);const o=new THREE.Object3D();for(let i=0;i<72;i++){const a=i*2*Math.PI/72;o.position.set(...polar(4.509,a,BAND0+.32));o.rotation.set(0,a,0);o.updateMatrix();holes.setMatrixAt(i,o.matrix)}groups.hardware.add(holes)}
+for(const y of [BAND0+.62,36.4,38.45,39.0,40.6,41.4,43.05])bandRing(4.506,y,.01,collarSeam);
+bandRing(4.53,38.95,.07,lipMat);
+for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p=polar(4.512,a);rod([p[0],BAND0+.65,p[2]],[p[0],BAND1-.08,p[2]],.007,collarSeam,Math.cos(a)>0?groups.shellFront:groups.shellBack)}
+{const holeGeo=new THREE.CircleGeometry(.1,16),holeMat=mat('#8d969c',.5,.6);for(const [g,front] of [[groups.shellFront,true],[groups.shellBack,false]]){const holes=new THREE.InstancedMesh(holeGeo,holeMat,36);const o=new THREE.Object3D();let n=0;for(let i=0;i<72;i++){const a=i*2*Math.PI/72;if((Math.cos(a)>0)!==front)continue;o.position.set(...polar(4.509,a,BAND0+.32));o.rotation.set(0,a,0);o.updateMatrix();holes.setMatrixAt(n++,o.matrix)}holes.count=n;g.add(holes)}}
 // Subtle body seams on the white hull, kept low-contrast as on the painted reference.
 const hullSeam=mat('#c9cdcf',.6,.2);
 for(let i=0;i<8;i++){const a=i*2*Math.PI/8+Math.PI/8,p=polar(4.503,a);rod([p[0],9.8,p[2]],[p[0],BAND0-.05,p[2]],.006,hullSeam,groups.hardware)}
-for(const deg of D.windows.value.centersDeg){const a=deg*Math.PI/180,w=D.windows.value.widthDeg*Math.PI/180,wb=D.windows.value.bottom,wt=D.windows.value.top;segment(4.507,wb-.07,wb+.02,a-w/2,a+w/2,M.dark,groups.windows);segment(4.507,wt-.02,wt+.07,a-w/2,a+w/2,M.dark,groups.windows);segment(4.517,wb,wt,a-w/2,a+w/2,M.glass,groups.windows);for(const edge of [a-w/2,a+w/2]){const p=polar(4.52,edge);rod([p[0],wb-.05,p[2]],[p[0],wt+.05,p[2]],.047,M.dark,groups.windows)}}
+// Rounded-rectangle windows (tall, softly radiused as in the render). Each window bay is an alpha-masked
+// patch over the open shell sectors: dark hull with a rounded hole, inner lining, tinted glass and a gasket.
+const WIN={width:.74,height:1.04,radius:.24,gasket:.07};
+function windowMask(kind,spanM,heightM,centerU){const n=256,c=document.createElement('canvas');c.width=c.height=n;const ctx=c.getContext('2d');const sx=n/spanM,sy=n/heightM;
+  const rr=(grow)=>{const w=(WIN.width+grow*2)*sx,h=(WIN.height+grow*2)*sy,x=centerU*n-w/2,y=n/2-h/2;ctx.beginPath();ctx.roundRect(x,y,w,h,[(WIN.radius+grow)*Math.min(sx,sy)*1.0]);};
+  ctx.fillStyle=kind==='shell'?'#fff':'#000';ctx.fillRect(0,0,n,n);
+  if(kind==='shell'){ctx.fillStyle='#000';rr(0);ctx.fill()}
+  else if(kind==='glass'){ctx.fillStyle='#fff';rr(.01);ctx.fill()}
+  else{ctx.fillStyle='#fff';rr(WIN.gasket);ctx.fill();ctx.fillStyle='#000';rr(0);ctx.fill()}
+  const t=new THREE.CanvasTexture(c);t.colorSpace=THREE.NoColorSpace;return t}
+const windowGlass=new THREE.MeshPhysicalMaterial({color:'#1d2a33',roughness:.05,metalness:.1,clearcoat:1,transparent:true,opacity:.42,side:THREE.DoubleSide,depthWrite:false});
+const gasket=new THREE.MeshStandardMaterial({color:'#0c0f12',roughness:.7,metalness:.2,side:THREE.DoubleSide});
+{const w=D.windows.value,step=Math.PI*2/96,h=w.top-w.bottom;
+  for(const deg of w.centersDeg){const c=deg*Math.PI/180;let a0=Infinity,a1=-Infinity;
+    for(let i=0;i<96;i++){const mid=(i+.5)*step;if(Math.cos(mid)>0&&Math.abs(Math.atan2(Math.sin(mid-c),Math.cos(mid-c)))<w.widthDeg*Math.PI/360){let s0=i*step;if(s0>Math.PI)s0-=Math.PI*2;a0=Math.min(a0,s0);a1=Math.max(a1,s0+step)}}
+    const centerU=(c-a0)/(a1-a0);
+    const shell=M.collar.clone();shell.alphaMap=windowMask('shell',4.5*(a1-a0),h,centerU);shell.alphaTest=.5;segment(4.5,w.bottom,w.top,a0,a1,shell,groups.shellFront);
+    const lining=M.inner.clone();lining.alphaMap=windowMask('shell',4.19*(a1-a0),h,centerU);lining.alphaTest=.5;segment(4.19,w.bottom,w.top,a0,a1,lining,groups.innerFront);
+    // reveal: a short rounded tube joining hull and lining around the opening
+    const glass=windowGlass.clone();glass.alphaMap=windowMask('glass',4.44*(a1-a0),h,centerU);glass.alphaTest=.3;segment(4.44,w.bottom,w.top,a0,a1,glass,groups.windows);
+    const ring=gasket.clone();ring.alphaMap=windowMask('gasket',4.513*(a1-a0),h,centerU);ring.alphaTest=.5;segment(4.513,w.bottom,w.top,a0,a1,ring,groups.windows);
+  }}
 // Aft closure: dark engine bay plate under the skirt.
 {const aft=mesh(new THREE.CircleGeometry(4.48,64),mat('#1b2025',.6,.6),groups.hardware,0,D.bodyBottom.value+.02,0);aft.rotation.x=Math.PI/2}
-// Four landing legs: tall white fairings on the skirt, a primary and a secondary strut, broad dark pads.
-const legMetal=new THREE.MeshPhysicalMaterial({color:'#b9bec1',roughness:.28,metalness:.9,clearcoat:.3});
-const padMat=new THREE.MeshPhysicalMaterial({color:'#1d2226',roughness:.5,metalness:.6});
-// Fairing: a rounded-top housing that widens toward the skirt and ends flush with the hull base.
-const fairingProfile=[new THREE.Vector2(0,D.bodyBottom.value-.05),new THREE.Vector2(1.08,D.bodyBottom.value-.05),new THREE.Vector2(1.04,3.4),new THREE.Vector2(.9,7.4)];
-for(let k=1;k<=12;k++){const a=k/12*Math.PI/2;fairingProfile.push(new THREE.Vector2(.9*Math.cos(a),7.4+1.4*Math.sin(a)))}
-const fairingGeometry=new THREE.LatheGeometry(fairingProfile,48);
-const fairingMaterial=hullMaterial(6,8);
+// Four landing legs. Each sits in a tall white shroud that is open on its outboard face; the concave
+// interior and the hull behind it are bare metal, deep enough for the folded strut (as in the render).
+const legMetal=new THREE.MeshPhysicalMaterial({color:'#d9dcdd',roughness:.32,metalness:.75,clearcoat:.4,clearcoatRoughness:.3});
+const bayMetal=new THREE.MeshPhysicalMaterial({color:'#a3aaae',roughness:.36,metalness:.9,side:THREE.DoubleSide});
+const bayBack=new THREE.MeshPhysicalMaterial({color:'#b4bbbf',roughness:.45,metalness:.8,side:THREE.DoubleSide});
+const padMat=new THREE.MeshPhysicalMaterial({color:'#17191b',roughness:.55,metalness:.5,clearcoat:.3});
+const BAY={r:1.05,top:9.2,open:Math.PI*.62};
+const bayProfile=[new THREE.Vector2(1.12,D.bodyBottom.value-.08),new THREE.Vector2(1.1,3.2),new THREE.Vector2(1.02,6.6),new THREE.Vector2(.92,BAY.top-1.2)];
+for(let k=1;k<=14;k++){const t=k/14*Math.PI/2;bayProfile.push(new THREE.Vector2(.92*Math.cos(t)+.001,BAY.top-1.2+1.2*Math.sin(t)))}
+const bayGeometry=new THREE.LatheGeometry(bayProfile,56,BAY.open/2,Math.PI*2-BAY.open);
+const shroudMaterial=hullMaterial(7,9);shroudMaterial.side=THREE.FrontSide;
 for(let i=0;i<4;i++){const a=Math.PI/4+i*Math.PI/2;
-  const fairing=mesh(fairingGeometry,fairingMaterial,groups.hardware,...polar(4.3,a,0));fairing.scale.set(1,1,.64);fairing.rotation.y=a;fairing.castShadow=true;fairing.receiveShadow=true;
-  const pad=polar(8.4,a,.42);
-  rod(polar(4.95,a,5.4),pad,.2,legMetal,groups.hardware);
-  rod(polar(5.0,a,2.7),polar(7.6,a,.62),.13,legMetal,groups.hardware);
-  rod(polar(4.9,a,4.1),polar(6.6,a,2.0),.09,M.dark,groups.hardware);
-  const foot=mesh(new THREE.CylinderGeometry(1.0,1.15,.16,40),padMat,groups.hardware,...pad);foot.position.y=.1;foot.castShadow=true;foot.receiveShadow=true;
-  const hub=mesh(new THREE.SphereGeometry(.28,16,12),legMetal,groups.hardware,pad[0],.3,pad[2]);hub.castShadow=true;
+  const radial=new THREE.Vector3(Math.sin(a),0,Math.cos(a)),side=new THREE.Vector3(Math.cos(a),0,-Math.sin(a));
+  const at=(r,y,lat=0)=>radial.clone().multiplyScalar(r).add(side.clone().multiplyScalar(lat)).setY(y).toArray();
+  const g=new THREE.Group();g.position.set(...at(4.42,0));g.rotation.y=a;groups.hardware.add(g);
+  const outer=mesh(bayGeometry,shroudMaterial,g);outer.castShadow=true;outer.receiveShadow=true;
+  const inner=mesh(bayGeometry,bayMetal,g);inner.scale.set(.97,.995,.97);inner.receiveShadow=true;
+  // rim lip along the open edges
+  for(const sgn of [-1,1]){const ang=sgn*BAY.open/2;const pts=bayProfile.map(p=>[Math.sin(ang)*p.x,p.y,Math.cos(ang)*p.x]);const lip=tube(pts,.035,legMetal,g)}
+  // bare metal hull panel at the back of the bay
+  // flat metal back plate closing the bay just proud of the hull; its outline follows the shroud profile
+  {const zPlate=.13,shape=new THREE.Shape(),half=bayProfile.map(p=>[Math.sqrt(Math.max(0,(p.x*.97)**2-zPlate**2)),p.y]);
+    shape.moveTo(-half[0][0],half[0][1]);for(const [w,y] of half)shape.lineTo(-w,y);for(const [w,y] of [...half].reverse())shape.lineTo(w,y);shape.closePath();
+    const plate=mesh(new THREE.ShapeGeometry(shape,24),bayBack,g,0,0,zPlate);plate.receiveShadow=true}
+  // primary strut from a pivot high inside the bay down to the pad
+  const pivot=at(4.95,7.9),padC=at(8.9,.5);
+  beam(pivot,padC,.42,.34,legMetal);
+  mesh(new THREE.CylinderGeometry(.2,.2,.6,20),legMetal,groups.hardware,...pivot).rotation.set(0,a,Math.PI/2);
+  // telescoping damper inside the strut line
+  const knee=new THREE.Vector3(...pivot).lerp(new THREE.Vector3(...padC),.68).toArray();
+  // lower V-brace from the bay base to the knee
+  for(const lat of [-.62,.62])beam(at(5.15,2.55,lat),knee,.2,.18,legMetal);
+  beam(at(5.15,2.55,-.62),at(5.15,2.55,.62),.18,.18,legMetal);
+  // footpad: broad, shallow, dark dish with a ball joint
+  const foot=mesh(new THREE.CylinderGeometry(1.15,1.28,.14,48),padMat,groups.hardware,padC[0],.08,padC[2]);foot.castShadow=true;foot.receiveShadow=true;
+  mesh(new THREE.SphereGeometry(.3,20,14),legMetal,groups.hardware,padC[0],.36,padC[2]).castShadow=true;
 }
 
 // External lift guide, platform and ground landing; the upper platform is exactly flush with Deck A.
@@ -219,15 +270,24 @@ for(const z of [-6.5,-4.4])for(let y=35.45;y<37;y+=.32)rod([-1.3,y,z],[1.3,y,z],
 rod([0,35.2,-5],[0,36.95,-5],.035,M.dark,lift);
 
 // Annular slabs with a genuine central 3 m aperture. Each tread reaches the ring edge.
-function annularFloor(y){const shape=new THREE.Shape();shape.absarc(0,0,4.18,0,Math.PI*2,false);const hole=new THREE.Path();hole.absarc(0,.3,1.5,0,Math.PI*2,true);shape.holes.push(hole);const g=new THREE.ExtrudeGeometry(shape,{depth:D.floorThickness.value,bevelEnabled:false,curveSegments:96});g.rotateX(Math.PI/2);const o=mesh(g,M.floor,groups.interior,0,y,0);o.receiveShadow=true;torus(1.50,.055,y+.07,M.floorEdge,groups.interior);return o}
+function annularFloor(y,i){const shape=new THREE.Shape();shape.absarc(0,0,4.18,0,Math.PI*2,false);const hole=new THREE.Path();hole.absarc(0,.3,1.5,0,Math.PI*2,true);if(i>0)shape.holes.push(hole);const g=new THREE.ExtrudeGeometry(shape,{depth:D.floorThickness.value,bevelEnabled:false,curveSegments:96});g.rotateX(Math.PI/2);const o=mesh(g,M.floor,groups.interior,0,y,0);o.receiveShadow=true;if(i>0)torus(1.50,.055,y+.07,M.floorEdge,groups.interior);return o}
 D.decks.value.forEach(annularFloor);
 // Deck A garage opening in the -Z shell: bridge to external platform, with clear gate.
 box(2.5,.12,.65,0,35.04,-4.43,M.floor,groups.interior);
 // The 54 treads form three one-turn flights. A landable walking line is radius ~1.0 m.
 const stairCx=0,stairCz=.3,innerR=.43,outerR=1.47,steps=18;
-function stairTread(y,a0,a1){const s=new THREE.Shape();const p1=polar(innerR,a0,0,stairCx,stairCz),p2=polar(outerR,a0,0,stairCx,stairCz),p3=polar(outerR,a1,0,stairCx,stairCz),p4=polar(innerR,a1,0,stairCx,stairCz);s.moveTo(p1[0],p1[2]);s.lineTo(p2[0],p2[2]);for(let k=1;k<=4;k++){const p=polar(outerR,a0+(a1-a0)*k/4,0,stairCx,stairCz);s.lineTo(p[0],p[2])}s.lineTo(p4[0],p4[2]);for(let k=3;k>=0;k--){const p=polar(innerR,a0+(a1-a0)*k/4,0,stairCx,stairCz);s.lineTo(p[0],p[2])}s.closePath();const g=new THREE.ShapeGeometry(s);g.rotateX(Math.PI/2);mesh(g,M.floor,groups.interior,0,y,0).receiveShadow=true}
+function stairTread(y,a0,a1){const s=new THREE.Shape();const p1=polar(innerR,a0,0,stairCx,stairCz),p2=polar(outerR,a0,0,stairCx,stairCz),p3=polar(outerR,a1,0,stairCx,stairCz),p4=polar(innerR,a1,0,stairCx,stairCz);s.moveTo(p1[0],p1[2]);s.lineTo(p2[0],p2[2]);for(let k=1;k<=4;k++){const p=polar(outerR,a0+(a1-a0)*k/4,0,stairCx,stairCz);s.lineTo(p[0],p[2])}s.lineTo(p4[0],p4[2]);for(let k=3;k>=0;k--){const p=polar(innerR,a0+(a1-a0)*k/4,0,stairCx,stairCz);s.lineTo(p[0],p[2])}s.closePath();const g=new THREE.ExtrudeGeometry(s,{depth:.06,bevelEnabled:true,bevelThickness:.01,bevelSize:.01,bevelSegments:1,curveSegments:4});g.rotateX(Math.PI/2);const o=mesh(g,M.tread,groups.interior,0,y,0);o.receiveShadow=true;o.castShadow=true}
 const stairStart=-Math.PI/2;
-for(let flight=0;flight<3;flight++){const base=D.decks.value[flight];for(let i=0;i<steps;i++){const a0=stairStart+i*2*Math.PI/steps,a1=a0+2*Math.PI/steps,yt=base+(i+1)*D.deckSpacing.value/steps;stairTread(yt,a0,a1);for(const r of [innerR,outerR]){if(r===outerR&&(i===0||i===steps-1))continue;const p0=polar(r,a0,yt,stairCx,stairCz),p1=polar(r,a1,yt,stairCx,stairCz);rod([p0[0],yt+.9,p0[2]],[p1[0],yt+.9+D.deckSpacing.value/steps,p1[2]],.025,M.rail);if(i%3===0)rod([p0[0],yt,p0[2]],[p0[0],yt+.9,p0[2]],.024,M.rail)}}}
+const stairRail=new THREE.MeshPhysicalMaterial({color:'#c9cfd2',roughness:.25,metalness:.9,clearcoat:.3});
+const railR=1.38,railH=.92,rise=D.deckSpacing.value/steps;
+for(let flight=0;flight<3;flight++){const base=D.decks.value[flight];const railPts=[];
+  for(let i=0;i<steps;i++){const a0=stairStart+i*2*Math.PI/steps,a1=a0+2*Math.PI/steps,yt=base+(i+1)*rise,am=(a0+a1)/2;stairTread(yt,a0,a1);
+    if(i>=2){const b=polar(railR,am,yt,stairCx,stairCz);rod(b,[b[0],yt+railH,b[2]],.016,stairRail)}}
+  for(let k=0;k<=48;k++){const t=2/steps+k/48*(1-2/steps),a=stairStart+t*2*Math.PI+Math.PI/steps,y=base+t*D.deckSpacing.value+rise*.5+railH;railPts.push(polar(railR,a,y,stairCx,stairCz))}
+  tube(railPts,.028,stairRail)}
+// Central column carries the inner tread edge from Deck A to just above Deck D.
+mesh(new THREE.CylinderGeometry(innerR-.01,innerR-.01,D.decks.value[3]+1.05-D.decks.value[0],40),M.panel,groups.interior,stairCx,(D.decks.value[0]+D.decks.value[3]+1.05)/2,stairCz).castShadow=true;
+torus(innerR+.01,.025,D.decks.value[3]+1.05,stairRail,groups.interior,Math.PI*2,0,stairCx,stairCz);
 for(let flight=0;flight<3;flight++){
   const vertices=[],indices=[];
   for(let i=0;i<=72;i++){const t=i/72,a=stairStart+t*Math.PI*2,y=D.decks.value[flight]+t*D.deckSpacing.value;for(const r of [innerR,outerR])vertices.push(...polar(r,a,y,stairCx,stairCz));if(i<72){const n=i*2;indices.push(n,n+1,n+2,n+1,n+3,n+2)}}
@@ -235,12 +295,16 @@ for(let flight=0;flight<3;flight++){
   const ramp=mesh(g,new THREE.MeshBasicMaterial({visible:false,side:THREE.DoubleSide}),groups.interior);
   ramp.userData={collisionSurface:true,flight:flight+1,visibility:'debug-only'};
 }
-// Floor-edge guarding leaves an explicit landing portal at the -X sector.
-for(const y of D.decks.value){for(let j=0;j<20;j++){const a0=-Math.PI/2+.28+j*(2*Math.PI-.55)/20,a1=a0+(2*Math.PI-.55)/20;for(const r of [1.50]){const p0=polar(r,a0,y+.95,0,.3),p1=polar(r,a1,y+.95,0,.3);rod(p0,p1,.023,M.rail);if(j%3===0){const b=polar(r,a0,y+.07,0,.3);rod(b,p0,.025,M.rail)}}}}
+// Floor-edge guarding around each opening leaves a 1.2 m landing portal at -X where the stair arrives and departs.
+{const guardR=1.58,gap=.4,a0=-Math.PI/2+gap,a1=-Math.PI/2+Math.PI*2-gap;
+  for(const [di,y] of D.decks.value.entries()){if(di===0)continue;
+    for(const h of [1.0,.52]){const pts=[];for(let k=0;k<=64;k++){const a=a0+(a1-a0)*k/64;pts.push(polar(guardR,a,y+h,0,.3))}tube(pts,h>.9?.03:.018,stairRail)}
+    for(let k=0;k<=14;k++){const a=a0+(a1-a0)*k/14,b=polar(guardR,a,y,0,.3);rod(b,[b[0],y+1.0,b[2]],.022,stairRail)}}}
 
 // Window-side upper room shell seams, light bands and readable deck markers.
-for(const y of D.decks.value){const top=Math.min(y+2.65,BAND1-.1),inNose=y>=BAND1-.2,lightY=inNose?y+2.2:top,lr=Math.min(4.11,noseRadiusAt(lightY)-.18);if(!inNose)for(let i=0;i<14;i++){const a=i*2*Math.PI/14,p=polar(4.15,a);rod([p[0],y+.24,p[2]],[p[0],top,p[2]],.012,M.panel)}for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p0=polar(lr,a,lightY),p1=polar(lr,a+2*Math.PI/32,lightY);rod(p0,p1,.016,M.light)} }
+for(const y of D.decks.value){const top=Math.min(y+2.65,BAND1-.1),inNose=y>=BAND1-.2,lightY=inNose?y+2.2:top,lr=Math.min(4.11,noseRadiusAt(lightY)-.18);if(!inNose)for(let i=0;i<14;i++){const a=i*2*Math.PI/14,p=polar(4.15,a);rod([p[0],y+.24,p[2]],[p[0],top,p[2]],.012,M.panel,Math.cos(a)>0?groups.innerFront:groups.interior)}for(let i=0;i<32;i++){const a=i*2*Math.PI/32,p0=polar(lr,a,lightY),p1=polar(lr,a+2*Math.PI/32,lightY);rod(p0,p1,.016,M.light,Math.cos(a+Math.PI/32)>0?groups.innerFront:groups.interior)} }
 deckNames.forEach((name,i)=>label(name,5.8,D.decks.value[i]+1.3,1.3,.93,'#d7f6fb',groups.labels));
+for(const [i,y] of D.decks.value.entries()){for(const a of [Math.PI*.25,Math.PI*1.25]){const l=new THREE.PointLight(i===3?'#ffe9cc':'#eef6ff',7,8,1.6);l.position.set(...polar(2.7,a,y+(i===3?2.1:2.45)));groups.interior.add(l)}}
 
 // Two independent airlocks. Each wall has a complete 1.2 m × 2.15 m hatch opening.
 function hatchFrame(cx,z,y,side){const hw=.6,hh=2.15;for(const x of [cx-hw-.065,cx+hw+.065])box(.12,hh,.14,x,y+hh/2,z,M.dark);box(1.46,.13,.15,cx,y+hh+.06,z,M.dark);for(let q=0;q<8;q++){const x=cx-.72+q*.205;box(.035,.03,.16,x,y+hh+.13,z,M.rail)}const hinge=side>0?cx+hw+.18:cx-hw-.18;const panel=box(.055,hh*.87,1.14,hinge,y+hh*.45,z+(side>0?.25:-.25),M.dark);panel.userData.openHatch=true;return panel}
@@ -250,7 +314,7 @@ airlock(2.55,'AIRLOCK 01');airlock(-2.55,'AIRLOCK 02');
 // Pressure boundary infill around the airlocks. Its middle section is behind the stair opening.
 for(const [x,w] of [[-3.84,.62],[0,3.05],[3.84,.62]])box(w,2.35,.1,x,36.275,-1.46,M.inner);
 // Garage hardware follows the clear rear annular route and the -Z lift gate.
-for(const x of [-3.85,3.85])box(.28,2.3,.45,x,36.25,-2.1,M.panel);
+for(const x of [-3.55,3.55])box(.28,2.3,.45,x,36.25,-2.1,M.panel);
 for(const x of [-1.5,1.5])box(.12,2.25,.16,x,36.225,-4.12,M.frame);
 box(3.1,.16,.16,0,37.35,-4.12,M.frame);
 for(const x of [-1.1,1.1])box(.22,.3,.45,x,35.32,-3.85,M.dark);
@@ -261,9 +325,9 @@ const B=D.decks.value[1];
 function hygiene(){const x0=1.85,x1=3.55,z0=-2.2,z1=-.55,h=2.35;box(.09,h,z1-z0,x1,B+h/2,(z0+z1)/2,M.inner);for(const z of [z0,z1])box(x1-x0,h,.09,(x0+x1)/2,B+h/2,z,M.inner);box(.1,h,.31,x0,B+h/2,z0+.155,M.inner);box(.1,h,.31,x0,B+h/2,z1-.155,M.inner);box(.1,.25,1.04,x0,B+h-.125,(z0+z1)/2,M.inner);box(.45,.52,.5,2.95,B+.3,-1.75,M.panel);box(.36,.11,.4,3.1,B+1.05,-.9,M.rail);box(.25,.4,.04,3.12,B+1.32,-.66,M.dark);label('HYGIENE',3.1,B+2.8,-1.15,.48)}
 hygiene();
 // Science bench and storage cabinets sit outside the 1.5 m central circulation ring.
-box(2.15,.12,.68,1.4,B+1.04,3.25,M.amber);
-for(const x of [.4,1.4,2.4]){box(.55,.76,.56,x,B+.42,3.35,M.panel);box(.46,.045,.04,x,B+.5,3.055,M.dark)}
-box(.7,.45,.06,2.15,B+1.58,3.78,M.screen);label('SCIENCE',1.45,B+2.72,3.5,.45);
+box(2.15,.12,.68,1.3,B+1.04,3.05,M.amber);
+for(const x of [.3,1.3,2.3]){box(.55,.76,.56,x,B+.42,3.1,M.panel);box(.46,.045,.04,x,B+.5,2.805,M.dark)}
+box(.7,.45,.06,1.9,B+1.58,3.45,M.screen);label('SCIENCE',1.45,B+2.72,3.5,.45);
 for(const x of [-3.55,-2.8])for(let k=0;k<2;k++){box(.69,1.15,.57,x,B+.6,-1.4+k*.8,M.panel);box(.48,.07,.03,x,B+.87,-1.095+k*.8,M.dark)}
 label('STORAGE',-3.3,B+2.7,-1.2,.47);
 // Folded resistance device, footplate and restraints: no separate claimed gym.
@@ -281,7 +345,7 @@ for(const [i,deg] of [50,130,230,310].entries()){
   box(1.1,.14,.08,0,2.18,-.93,M.inner,g);
   box(1.77,.2,.73,0,.58,.07,M.berth,g);box(1.84,.08,.26,0,.52,-.41,M.rail,g);
   for(const sx of [-.65,.65])box(.035,.03,.86,sx,.7,.05,M.rail,g);
-  box(.45,.55,.36,.73,1.18,.48,M.panel,g);box(.13,.035,.18,-.72,1.67,.58,M.light,g);
+  box(.45,.55,.36,.73,1.18,.48,M.panel,g);box(.13,.035,.18,-.72,1.67,.4,M.light,g);
   const p=polar(3.7,a,C+2.5);label(`BERTH 0${i+1}`,p[0],p[1],p[2],.43)
 }
 // Galley occupies the rear gap between berths; the central ring remains free.
@@ -300,22 +364,32 @@ for(const [i,deg] of [-36,-12,12,36].entries()){
   for(const sx of [-.19,0,.19])box(.12,.016,.007,sx,1.22,.779,sx===0?M.light:M.blue,g)
 }
 // Curved workstation bank on the opposite side and flush service panels.
-for(let i=0;i<8;i++){const a=Math.PI-1.02+i*2.04/7,p=polar(3.65,a,F+.9);const top=box(.73,.11,.61,p[0],p[1],p[2],M.amber);top.rotation.y=a;const panel=box(.74,1.35,.10,p[0],F+1.58,p[2]+Math.sign(Math.cos(a))*.33,M.inner);panel.rotation.y=a}
+for(let i=0;i<8;i++){const a=Math.PI-1.02+i*2.04/7,p=polar(3.55,a,F+.9);const top=box(.73,.06,.62,p[0],p[1],p[2],M.amber);top.rotation.y=a;const c=polar(3.62,a,F+.42);const cab=box(.7,.84,.5,c[0],c[1],c[2],M.panel);cab.rotation.y=a;const h=polar(3.67,a,F+.62);const handle=box(.4,.03,.03,...polar(3.36,a,F+.7),M.dark);handle.rotation.y=a}
 for(let i=0;i<3;i++){const a=Math.PI-.7+i*.7,p=polar(4.03,a,F+1.52);const hatch=box(.6,.64,.035,p[0],p[1],p[2],M.dark);hatch.rotation.y=a}
 label('CONTROL DECK',0,F+2.45,3.3,.55);
 // A short, explicitly non-deck docking access ladder in the upper void.
 const topDeck=D.decks.value[3];
-for(const x of [-.4,.4])rod([x,topDeck+.2,-.9],[x,49.35,-.9],.045,M.frame);
-for(let y=topDeck+.55;y<49.3;y+=.32)rod([-.4,y,-.9],[.4,y,-.9],.025,M.frame);
-for(let i=0;i<16;i++){const a=i*2*Math.PI/16,p=polar(1.6,a,49.45);rod([p[0],49.45,p[2]],[p[0],50.25,p[2]],.018,M.rail)}
+// Inclined ladder: foot on the Deck D floor outside the stair opening, head inside the docking tunnel.
+{const foot=new THREE.Vector3(0,topDeck,-1.95),head=new THREE.Vector3(0,49.55,-.45);
+  for(const x of [-.36,.36])rod([x,foot.y,foot.z],[x,head.y,head.z],.04,M.frame);
+  for(let k=1;k<18;k++){const p=foot.clone().lerp(head,k/18);rod([-.36,p.y,p.z],[.36,p.y,p.z],.022,M.frame)}}
+// Docking tunnel: a closed white vestibule from the ladder head to the nose docking port.
+{const tunnelY0=49.3,tunnelY1=51.86;mesh(new THREE.CylinderGeometry(.78,.78,tunnelY1-tunnelY0,48,1,true),M.inner,groups.interior,0,(tunnelY0+tunnelY1)/2,0).receiveShadow=true;
+  torus(.8,.06,tunnelY0,M.frame,groups.interior,Math.PI*2,0,0,0);
+  const cone=mesh(new THREE.CylinderGeometry(.8,1.35,.35,48,1,true),M.inner,groups.interior,0,tunnelY0-.17,0);
+  const hatch=mesh(new THREE.CylinderGeometry(.62,.62,.08,40),M.dark,groups.interior,0,tunnelY1-.25,0);
+  for(let i=0;i<12;i++){const a=i*Math.PI/6,p=polar(.7,a,tunnelY1-.25);mesh(new THREE.SphereGeometry(.03,8,6),M.frame,groups.interior,...p)}}
 
-// 1.8 m human silhouette, outside the footpad footprint for scale.
-const human=new THREE.Group();scene.add(human);human.position.set(10,0,7);
-const suit=mat('#dce1df',.82),visor=mat('#1e3944',.18,.25);
-mesh(new THREE.SphereGeometry(.18,16,12),visor,human,0,1.61,0);
-mesh(new THREE.CapsuleGeometry(.18,.58,5,12),suit,human,0,1.04,0);
-for(const x of [-.12,.12]){rod([x,.75,0],[x*1.18,.08,0],.065,suit,human);rod([x*2,1.27,0],[x*2.6,.76,0],.055,suit,human)}
-box(.38,.07,.2,0,.07,.07,M.dark,human);label('1.8 m human',10,2.22,7,.72);
+// Astronauts: NASA Z2 planetary spacesuit (NASA 3D Resources), scaled to a 1.85 m suited height.
+// One stands outside the footpads as the scale reference; two wait at the lift's ground station.
+const draco=new DRACOLoader().setDecoderPath(`${import.meta.env.BASE_URL}draco/`);
+new GLTFLoader().setDRACOLoader(draco).load(`${import.meta.env.BASE_URL}models/nasa-z2-spacesuit.glb`,gltf=>{
+  const base=gltf.scene;base.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;if(o.material){o.material.envMapIntensity=.8}}});
+  const box=new THREE.Box3().setFromObject(base),size=box.getSize(new THREE.Vector3()),scale=1.85/size.y;
+  base.scale.setScalar(scale);base.position.set(-(box.min.x+box.max.x)/2*scale,-box.min.y*scale,-(box.min.z+box.max.z)/2*scale);
+  for(const [x,z,ry] of [[10,7,-.9],[-.55,-5.2,Math.PI*.95],[.6,-5.75,Math.PI*1.1]]){const holder=new THREE.Group();holder.add(base.clone());holder.position.set(x,Math.max(0,lunar.heightAt(x,z))+(Math.hypot(x,z)<7?.13:0),z);holder.rotation.y=ry;scene.add(holder)}
+});
+label('1.8 m human',10,2.4,7,.72);
 const capsule=mesh(new THREE.CapsuleGeometry(.3,1.2,8,16),new THREE.MeshBasicMaterial({color:'#58d7ee',transparent:true,opacity:.32,depthWrite:false}),groups.debug,0,36,2.6);
 capsule.userData={height:1.8,radius:.3,role:'clearance reference'};
 label('1.8 m × 0.3 m',0,37.25,2.6,.46,'#88efff',groups.debug);
@@ -342,11 +416,18 @@ let shellMode='exterior',targetCamera=null;
 function setMode(mode){shellMode=mode;$('#shell-mode').querySelectorAll('button').forEach(b=>b.classList.toggle('active',b.dataset.mode===mode));const ext=mode==='exterior',ghost=mode==='ghost';groups.shellFront.visible=ext||ghost;groups.noseFront.visible=ext||ghost;groups.innerFront.visible=false;groups.windows.visible=ext||ghost;groups.decals.visible=ext||ghost;groups.interior.visible=true;groups.labels.visible=!ext&&$('[data-toggle="labels"]').classList.contains('on');groups.shellBack.visible=true;groups.noseBack.visible=true;for(const g of [groups.shellFront,groups.shellBack,groups.noseFront,groups.noseBack])g.traverse(o=>{if(o.isMesh){o.material.transparent=ghost;o.material.opacity=ghost?.13:1;o.material.depthWrite=!ghost}});$('#view-status').textContent=`${mode.toUpperCase()} · ${$('.preset.active span')?.textContent||'CUSTOM VIEW'}`}
 function setPreset(i){const p=presets[i];presetList.querySelectorAll('.preset').forEach((b,j)=>b.classList.toggle('active',j===i));setMode(p[2]);targetCamera={position:new THREE.Vector3(...p[3]),target:new THREE.Vector3(...p[4])};$('#view-description').textContent=p[5];$('#view-status').textContent=`${p[2].toUpperCase()} · ${p[0].toUpperCase()}`}
 $('#shell-mode').addEventListener('click',e=>{if(e.target.dataset.mode)setMode(e.target.dataset.mode)});
-document.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>{b.classList.toggle('on');groups[b.dataset.toggle].visible=b.classList.contains('on');if(b.dataset.toggle==='labels')groups.detailLabels.visible=b.classList.contains('on')});
+function setToggle(name,on){const b=document.querySelector(`[data-toggle="${name}"]`);b.classList.toggle('on',on);if(name==='labels'){$('#labels-chip').classList.toggle('on',on);groups.labels.visible=on&&shellMode!=='exterior'}else groups[name].visible=on}
+document.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>setToggle(b.dataset.toggle,!b.classList.contains('on')));
+$('#labels-chip').onclick=()=>setToggle('labels',!$('#labels-chip').classList.contains('on'));
+addEventListener('keydown',e=>{if(e.key==='l'||e.key==='L')setToggle('labels',!$('#labels-chip').classList.contains('on'))});
 $('.mobile-menu').onclick=()=>$('.sidebar').classList.toggle('open');
 document.querySelectorAll('.preset,#shell-mode button').forEach(b=>b.addEventListener('click',()=>$('.sidebar').classList.remove('open')));
 setMode('exterior');
-if(import.meta.env.DEV)window.__view={camera,orbit,THREE};
-function resize(){const w=viewport.clientWidth,h=viewport.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h)}
+if(import.meta.env.DEV)window.__view={camera,orbit,THREE,scene};
+// Post-processing: GTAO grounds furniture, seams and leg bays; OutputPass applies tone mapping and sRGB.
+const composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));
+const gtao=new GTAOPass(scene,camera,1,1);gtao.updateGtaoMaterial({radius:.6,distanceExponent:1.4,thickness:1.2,scale:1.1,samples:16});gtao.updatePdMaterial({lumaPhi:10,depthPhi:2,normalPhi:3,radius:6,rings:2,samples:16});gtao.blendIntensity=.9;composer.addPass(gtao);
+composer.addPass(new OutputPass());
+function resize(){const w=viewport.clientWidth,h=viewport.clientHeight;camera.aspect=w/h;camera.updateProjectionMatrix();renderer.setSize(w,h);composer.setPixelRatio(Math.min(devicePixelRatio,1.5));composer.setSize(w,h)}
 new ResizeObserver(resize).observe(viewport);resize();
-const clock=new THREE.Clock();function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);if(targetCamera){const f=1-Math.exp(-dt*4);camera.position.lerp(targetCamera.position,f);orbit.target.lerp(targetCamera.target,f);if(camera.position.distanceTo(targetCamera.position)<.01&&orbit.target.distanceTo(targetCamera.target)<.01)targetCamera=null}orbit.update();groups.detailLabels.visible=shellMode!=='exterior'&&groups.labels.visible&&camera.position.distanceTo(orbit.target)<20;renderer.render(scene,camera)}animate();
+const clock=new THREE.Clock();function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);if(targetCamera){const f=1-Math.exp(-dt*4);camera.position.lerp(targetCamera.position,f);orbit.target.lerp(targetCamera.target,f);if(camera.position.distanceTo(targetCamera.position)<.01&&orbit.target.distanceTo(targetCamera.target)<.01)targetCamera=null}orbit.update();if(camera.position.y<.5){camera.position.y=.5}groups.detailLabels.visible=shellMode!=='exterior'&&groups.labels.visible&&camera.position.distanceTo(orbit.target)<24;{const decks=D.decks.value;let base=decks[0];for(const y of decks)if(orbit.target.y>=y-.6)base=y;for(const l of groups.detailLabels.children)l.visible=l.position.y>=base-.2&&l.position.y<base+D.deckSpacing.value-.05}composer.render();renderer.autoClear=false;renderer.clearDepth();renderer.render(overlay,camera);renderer.autoClear=true}animate();

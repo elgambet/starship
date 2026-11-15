@@ -96,3 +96,9 @@ The screenshots/reference copies are stored for local research and retain their 
 ## Later objective: walkable level (not part of the first version)
 
 A later phase should use a **1.8 m tall human character** to explore the accessible interior and, eventually, the elevator and lunar surface. Plan for familiar shooter controls: **W/A/S/D** movement, mouse look with pointer lock, **Shift** sprint, **Ctrl** crouch, and optional jump/interact keys. Use collision, stairs/ladder or elevator interaction, doorway clearances and camera height appropriate to a 1.8 m avatar. Movement speed, suit size and gravity behavior will be game-design choices, not inferred spacecraft dimensions. This phase is recorded here only; it is **not implemented now**.
+
+## Third-party assets in the viewer
+
+- `public/models/nasa-z2-spacesuit.glb`: NASA Z2 planetary spacesuit, from [NASA 3D Resources](https://github.com/nasa/NASA-3D-Resources/tree/master/3D%20Models/Z2%20Spacesuit). Draco-compressed; the decoder in `public/draco/` is copied from the installed `three` package.
+- `public/textures/earth-blue-marble-2048.jpg`: Earth texture from the [three.js examples](https://github.com/mrdoob/three.js/tree/r181/examples/textures/planets), derived from NASA Blue Marble imagery.
+- The lunar terrain (`src/terrain.js`) is fully procedural: power-law crater population with rims and ejecta, bright halos around fresh craters, boulder fields on fresh rims, a regolith detail/normal map and distant highlands. NASA orbital photographs were not used because their baked shadows and perspective do not work as a ground texture.
