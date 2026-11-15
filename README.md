@@ -15,19 +15,9 @@ npm run dev
 
 Open the local address printed by Vite. `npm run build` creates the production bundle in `dist/`.
 
-### Deploy to GitLab Pages
+### Deploy to GitHub Pages
 
-[`.gitlab-ci.yml`](.gitlab-ci.yml) builds the site on every branch and merge request, and publishes it with GitLab Pages on the default branch. Push to GitLab, wait for the `pages` job, and open **Deploy → Pages** in the project to find the URL (usually `https://<namespace>.gitlab.io/<project>/`). The Vite base is relative ([`vite.config.js`](vite.config.js)), so the same build works at any path; set `VITE_BASE` to force an absolute one.
-
-The viewer includes Exterior, Cutaway and Ghost shell modes; eight camera presets; deck and measurement labels; and a 1.8 m × 0.3 m clearance capsule toggle. Drag to orbit, scroll to zoom and right drag to pan. The section exposes four actual annular deck floors linked by three steep straight stairs (ship's-ladder style, about 50°) beside a central storage core with numbered doors, as in the SpaceX cabin render. Two separately enclosed approximately 13 m³ airlocks each have inner and outer hatch apertures. Both reach the rear garage and the lift upper station. Deck B has enclosed hygiene, science, storage and exercise fixtures; Deck C has four control stations aligned with the front windows; Deck D, inside the nose base, has four open berth pods and a compact galley. The exterior proportions (8.4 m blunt-ogive nose, 9.2 m dark crew/garage band, decal sizes and leg fairings) are matched to the NASA/SpaceX lunar-surface render; the hull uses a clear-coated white painted-steel material with metric weld and panel maps and image-based reflections.
-
-The exterior was revised after comparison with a SpaceX/NASA concept-art crop; the initial and reference screenshots, identified problems and corrections are in [VISUAL_QA.md](research/VISUAL_QA.md). The viewer is a stylized real-time spatial model. Photoreal materials and detailed exterior hardware would be a separate visual-fidelity pass.
-
-Model measurements and their evidence labels live in [`src/dimensions.js`](src/dimensions.js). The scene uses one unit per metre, `Y` up, and ground at `y = 0`. A hidden planar ramp accompanies each visible stair flight for a later collision controller. The ground, floor and padded-wall maps are deterministic Canvas textures generated at runtime; none of the research screenshots are mapped onto the model. Room sizes, deck elevations, hatch dimensions, window count and placements, leg geometry and lift footprint are **estimated** design choices. First-person movement, pressure simulation and lift animation are outside this visual phase.
-
-Research snapshot: **15 November 2026**. All dimensions are in metres unless stated otherwise. This repository contains the phase-one 3D viewer, research and reference images. The first-person walking level remains a later phase. For agent-readable source text, use the [PDF-to-Markdown index](research/PDF_INDEX.md) and the complete page-addressable extracts in [`research/sources-md/`](research/sources-md/). The original PDFs remain available for visual verification. The [interior evidence inventory](research/INTERIOR_LAYOUT.md) answers which floor views, airlock photos and habitation references actually exist.
-
-**Model specification:** [THREEJS_MODEL_SPEC.md](research/THREEJS_MODEL_SPEC.md) is the self-contained build reference. It transcribes all 17 local images, defines a four-deck layout with stairs and two airlocks, distinguishes published values from design assumptions, and gives procedural texture-mapping recipes.
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml) builds the site on every push and pull request, and deploys it to GitHub Pages on `main`. One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**. The site is then served at `https://<user>.github.io/<repo>/`. The Vite base is relative ([`vite.config.js`](vite.config.js)), so the same build works at any path; set `VITE_BASE` to force an absolute one.
 
 ## Scope and current design context
 
