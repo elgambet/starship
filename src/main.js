@@ -12,6 +12,10 @@ import { createLunarTerrain } from './terrain.js';
 import { createFirstPerson } from './firstPerson.js';
 import { buildInterior } from './interior.js';
 import { Octree } from 'three/addons/math/Octree.js';
+// Octree children are created with the default depth (16) and the parent's limits are not passed down, so
+// converging triangle fans (nose tip, cylinder caps) were split to level 16 and duplicated millions of times.
+// Cap the recursion depth globally; leaves at level 7 are ~0.4 m, plenty for a 0.3 m capsule.
+{const split=Octree.prototype.split;Octree.prototype.split=function(level){return level>=7?this:split.call(this,level)}}
 import { dimensions as D, deckNames } from './dimensions.js';
 import './style.css';
 
@@ -26,7 +30,7 @@ app.innerHTML = `<button class="mobile-menu" aria-label="Open controls">☰</but
   <div class="group"><h2>Published scale</h2><div class="fact"><strong>52 m</strong><span class="badge">Published</span><label>Approximate vehicle height</label></div><div class="fact"><strong>9 m</strong><span class="badge">Published</span><label>Nominal hull diameter</label></div><div class="fact"><strong>35.1 m</strong><span class="badge">Published</span><label>Approximate elevator boarding height</label></div><div class="fact"><strong>2 × ~13 m³</strong><span class="badge">Published</span><label>Separate airlock volumes</label></div></div>
   <div class="group"><h2>Model interpretation</h2><p class="note"><span class="badge observed">Observed</span> motifs come from SpaceX and NASA images. <span class="badge estimated">Estimated</span> deck positions, stairs, rooms, windows and furniture form a connected concept layout. They are not released vehicle drawings.</p></div>
   <p class="note">Drag to orbit · scroll to zoom · right drag to pan<br/>WASD walking is planned for the next phase.</p>
-</aside><main class="viewport"><div class="topbar"><div class="title">CREWED LUNAR LANDER / SECTION STUDY</div><div class="top-actions"><button class="chip walk" id="walk-btn" title="Walk the ship in first person (desktop)">Walk in first person</button><button class="chip on" id="labels-chip" title="Toggle deck labels (L)">Labels</button><div class="status" id="view-status">EXTERIOR · FULL SHIP</div></div></div><div class="layer-tooltip" id="view-description">Orbit the complete vehicle, then choose Cutaway to inspect the four connected decks.</div><div class="fp-hud" hidden><button class="fp-exit" id="fp-exit">← Exit first person</button><div class="fp-cross"></div><div class="fp-prompt" id="fp-prompt"></div><div class="fp-help" id="fp-help"><strong>First person</strong><span>Click to look around</span><span><b>W A S D</b> move · <b>Shift</b> run</span><span><b>E</b> or click · use lift buttons</span><span><b>Esc</b> releases the mouse</span></div><div class="fp-touch"><div class="fp-stickzone" id="fp-stickzone"><div class="fp-stick" id="fp-stick"><div class="fp-knob" id="fp-knob"></div></div></div><button class="fp-btn fp-run" id="fp-run">RUN</button><button class="fp-btn fp-use" id="fp-use">USE</button></div><div class="fp-rotate"><div class="fp-phone"></div><strong>Rotate your phone</strong><span>First person is played in landscape</span></div></div><div class="footer"><span>NASA / SpaceX public references · layout estimates marked</span><span class="compass">+Z WINDOW SIDE ↗</span></div></main>`;
+</aside><main class="viewport"><div class="topbar"><div class="title">CREWED LUNAR LANDER / SECTION STUDY</div><div class="top-actions"><button class="chip walk" id="walk-btn" title="Walk the ship in first person (desktop)">Walk in first person</button><button class="chip on" id="labels-chip" title="Toggle deck labels (L)">Labels</button><div class="status" id="view-status">EXTERIOR · FULL SHIP</div></div></div><div class="layer-tooltip" id="view-description">Orbit the complete vehicle, then choose Cutaway to inspect the four connected decks.</div><div class="fp-loading" id="fp-loading" hidden><div class="fp-spinner"></div><strong>Preparing first person</strong><span>Building the collision model…</span></div><div class="fp-hud" hidden><button class="fp-exit" id="fp-exit">← Exit first person</button><div class="fp-cross"></div><div class="fp-prompt" id="fp-prompt"></div><div class="fp-help" id="fp-help"><strong>First person</strong><span>Click to look around</span><span><b>W A S D</b> move · <b>Shift</b> run</span><span><b>E</b> or click · use lift buttons</span><span><b>Esc</b> releases the mouse</span></div><div class="fp-touch"><div class="fp-stickzone" id="fp-stickzone"><div class="fp-stick" id="fp-stick"><div class="fp-knob" id="fp-knob"></div></div></div><button class="fp-btn fp-run" id="fp-run">RUN</button><button class="fp-btn fp-use" id="fp-use">USE</button></div><div class="fp-rotate"><div class="fp-phone"></div><strong>Rotate your phone</strong><span>First person is played in landscape</span></div></div><div class="footer"><span>NASA / SpaceX public references · layout estimates marked</span><span class="compass">+Z WINDOW SIDE ↗</span></div></main>`;
 
 const viewport = $('.viewport');
 const scene = new THREE.Scene();
@@ -302,10 +306,10 @@ const liftRail=new THREE.MeshPhysicalMaterial({color:'#d3d8db',roughness:.16,met
 for(const x of [-1.05,1.05])tube([[x,0,.95],[x,1.0,.95],[x,1.05,.85],[x,1.0,.6],[x,0,.6]].map(([a,b,c])=>[a,b,c]),.022,liftRail,liftCar);
 // Interactive call panels (first-person mode uses E or click; the viewer can watch the car move).
 const interactables=[];
-function callPanel(pos,rotY,parent,label,action){const g=new THREE.Group();g.position.set(...pos);g.rotation.y=rotY;parent.add(g);box(.24,.36,.07,0,0,0,M.dark,g);
+function callPanel(pos,rotY,parent,label,action){const g=new THREE.Group();g.position.set(...pos);g.rotation.y=rotY;parent.add(g);const plate=box(.24,.36,.07,0,0,0,M.dark,g);
   const button=mesh(new THREE.CylinderGeometry(.06,.06,.035,28),new THREE.MeshStandardMaterial({color:'#2a0d08',emissive:'#ff6a3d',emissiveIntensity:.7,roughness:.4}),g,0,.03,.045);button.rotation.x=Math.PI/2;
   const lamp=mesh(new THREE.CircleGeometry(.025,16),new THREE.MeshBasicMaterial({color:'#7dffb0'}),g,0,-.11,.036);
-  interactables.push({mesh:button,label,action});return button}
+  interactables.push({mesh:button,hit:plate,label,action});return button}
 const lift={y:LIFT.bottom,target:LIFT.bottom,v:0,
   get moving(){return Math.abs(this.target-this.y)>1e-3},
   get atTop(){return this.target===LIFT.top},
@@ -439,11 +443,25 @@ function buildCollisionOctree(){
   const flipped=geo=>{const g=geo.index?geo.toNonIndexed():geo.clone(),p=g.attributes.position;for(let i=0;i<p.count;i+=3){const x=p.getX(i+1),y=p.getY(i+1),z=p.getZ(i+1);p.setXYZ(i+1,p.getX(i+2),p.getY(i+2),p.getZ(i+2));p.setXYZ(i+2,x,y,z)}return g};
   const root=new THREE.Group(),add=(geo,matrix,twoSided=true)=>{for(const g of twoSided?[geo,flipped(geo)]:[geo]){const m=new THREE.Mesh(g);m.matrixAutoUpdate=false;m.matrix.copy(matrix);root.add(m)}};
   for(const {mesh,w,h,d} of solids){if(isUnder(mesh,liftCar)||Math.min(w,h,d)<.025)continue;add(new THREE.BoxGeometry(w,h,d),mesh.matrixWorld,false)}
-  const shell=o=>o.geometry.type==='CylinderGeometry'&&o.geometry.parameters.openEnded&&o.geometry.parameters.radiusTop>=4;
+  // Big render triangles (32 m hull strips, fan-triangulated floors) get copied into thousands of octree
+  // cells, so the hull, lining and floors use dedicated, finely tessellated collision surfaces instead.
+  const I=new THREE.Matrix4();
+  const cyl=(r,y0,y1,a0,a1)=>{if(y1-y0<.01||a1-a0<.001)return;add(new THREE.CylinderGeometry(r,r,y1-y0,Math.max(2,Math.ceil((a1-a0)*r/.8)),Math.max(1,Math.ceil((y1-y0)/1.2)),true,a0,a1-a0).translate(0,(y0+y1)/2,0),I)};
+  const GATE_A=.31,A0=D.decks.value[0],gateTop=37.38;
+  // inner lining: the cabin wall from Deck A to the nose base, with the garage gate cut out
+  cyl(4.19,A0,BAND1,Math.PI+GATE_A,Math.PI*3-GATE_A);cyl(4.19,gateTop,BAND1,Math.PI-GATE_A,Math.PI+GATE_A);
+  // outer hull around the lift shaft (the only exterior wall a walker can reach above the ground)
+  cyl(4.5,D.bodyBottom.value,35.05,Math.PI-.7,Math.PI+.7);cyl(4.5,35.05,BAND1,Math.PI-.7,Math.PI-GATE_A);cyl(4.5,35.05,BAND1,Math.PI+GATE_A,Math.PI+.7);cyl(4.5,gateTop,BAND1,Math.PI-GATE_A,Math.PI+GATE_A);
+  // deck floors: a square grid aligned with the stair-opening edges (0.2 m × 0.254 m), minus the opening
+  const holeHalfZ=STAIR.half+.07,cz=holeHalfZ/5;
+  D.decks.value.forEach((y,k)=>{const f=holeFor[k],pos=[];
+    for(let ix=-22;ix<22;ix++)for(let iz=-Math.ceil(4.2/cz);iz<Math.ceil(4.2/cz);iz++){const x0=ix*.2,x1=x0+.2,z0=iz*cz,z1=z0+cz;if(Math.hypot((x0+x1)/2,(z0+z1)/2)>4.2)continue;
+      if(f&&x0>=lanes[f.lane][0]-1e-6&&x1<=lanes[f.lane][1]+1e-6&&z0>=-holeHalfZ-1e-6&&z1<=holeHalfZ+1e-6)continue;
+      pos.push(x0,y,z0,x1,y,z0,x1,y,z1,x0,y,z0,x1,y,z1,x0,y,z1)}
+    const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));add(g,I)});
   const take=(g,test)=>g.traverse(o=>{if(o.isMesh&&!o.isInstancedMesh&&!isUnder(o,liftCar)&&test(o))add(o.geometry,o.matrixWorld)});
-  for(const g of [groups.shellFront,groups.shellBack,groups.innerFront])take(g,shell);
-  take(groups.interior,o=>shell(o)||o.userData.collider);
-  take(groups.hardware,o=>(o.geometry.type==='CylinderGeometry'&&o.geometry.parameters.radiusTop>=.5)||o.geometry.type==='LatheGeometry');
+  take(groups.interior,o=>o.userData.collider&&o.geometry.type!=='ExtrudeGeometry');
+  take(groups.hardware,o=>(o.geometry.type==='CylinderGeometry'&&o.geometry.parameters.radiusTop>=.5&&o.geometry.parameters.radiusTop<4)||o.geometry.type==='LatheGeometry');
   take(groups.noseFront,()=>true);take(groups.noseBack,()=>true);
   for(const o of extraColliders)add(o.geometry,o.matrixWorld);
   return new Octree().fromGraphNode(root);
@@ -451,19 +469,26 @@ function buildCollisionOctree(){
 // Phones and tablets get on-screen controls; desktops use pointer lock + keyboard.
 const isTouch=matchMedia('(pointer: coarse)').matches&&!matchMedia('(hover: hover)').matches;
 const canWalk=isTouch||matchMedia('(hover: hover) and (pointer: fine)').matches;
-if(isTouch){$('.fp-hud').classList.add('touch');$('#fp-help').innerHTML='<strong>First person</strong><span><b>Left thumb</b> anywhere on the left half to move</span><span><b>Right thumb</b> drag on the right half to look</span><span><b>USE</b> presses the lift button you look at · <b>RUN</b> toggles running</span><span>Touch to start</span>';
+if(isTouch){$('.fp-hud').classList.add('touch');$('#fp-help').innerHTML='<strong>First person</strong><span><b>Left thumb</b> anywhere on the left half to move</span><span><b>Right thumb</b> drag on the right half to look</span><span><b>Tap</b> a lift button, or aim at it and press <b>USE</b> · <b>RUN</b> toggles running</span><span>Touch to start</span>';
   sun.shadow.mapSize.set(2048,2048)}
 const hud=$('.fp-hud');
 const fp=createFirstPerson({camera,domElement:renderer.domElement,buildOctree:buildCollisionOctree,heightAt:(x,z)=>lunar.heightAt(x,z),lift,interactables,
   touchUI:isTouch?{zone:$('#fp-stickzone'),stick:$('#fp-stick'),knob:$('#fp-knob'),useButton:$('#fp-use'),runButton:$('#fp-run')}:null,
   ui:{setLocked:on=>$('#fp-help').classList.toggle('show',!on),touched:()=>$('#fp-help').classList.remove('show'),setPrompt:html=>{$('#fp-prompt').innerHTML=html;$('#fp-prompt').classList.toggle('show',!!html)}}});
-function enterFirstPerson(){
+let enteringFP=false;
+async function enterFirstPerson(){
+  if(enteringFP||fp.active)return;enteringFP=true;
+  // fullscreen/orientation must be requested inside the tap gesture, before any await
+  if(isTouch){const root=document.documentElement;if(root.requestFullscreen&&!document.fullscreenElement)root.requestFullscreen({navigationUI:'hide'}).then(()=>screen.orientation?.lock?.('landscape')).catch(()=>{})}
+  const loading=$('#fp-loading');loading.hidden=false;
+  try{await fp.prepare()}finally{loading.hidden=true}
   targetCamera=null;orbit.enabled=false;app.classList.add('fp');hud.hidden=false;
   setMode('exterior');groups.innerFront.visible=true;groups.labels.visible=false;groups.detailLabels.visible=false;groups.guides.visible=false;groups.debug.visible=false;
   for(const a of astronauts)if(a.userData.atLift)a.visible=false;
   camera.fov=70;camera.updateProjectionMatrix();
+  $('#fp-help').classList.add('show');
   fp.enter(new THREE.Vector3(3.2,0,-12),new THREE.Vector3(0,3,-5.45));
-  if(isTouch){$('#fp-help').classList.add('show');const root=document.documentElement;if(root.requestFullscreen&&!document.fullscreenElement)root.requestFullscreen({navigationUI:'hide'}).then(()=>screen.orientation?.lock?.('landscape')).catch(()=>{})}
+  enteringFP=false;
 }
 function exitFirstPerson(){
   fp.exit();app.classList.remove('fp');hud.hidden=true;orbit.enabled=true;
@@ -475,7 +500,7 @@ function exitFirstPerson(){
 }
 if(canWalk)$('#walk-btn').onclick=enterFirstPerson;else $('#walk-btn').remove();
 $('#fp-exit').onclick=exitFirstPerson;
-if(import.meta.env.DEV)Object.assign(window.__view,{fp,lift,enterFirstPerson,exitFirstPerson,interactables,renderOnce:()=>{composer.render();renderer.autoClear=false;renderer.clearDepth();renderer.render(overlay,camera);renderer.autoClear=true}});
+if(import.meta.env.DEV)Object.assign(window.__view,{fp,lift,buildCollisionOctree,enterFirstPerson,exitFirstPerson,interactables,renderOnce:()=>{composer.render();renderer.autoClear=false;renderer.clearDepth();renderer.render(overlay,camera);renderer.autoClear=true}});
 // Post-processing: GTAO grounds furniture, seams and leg bays; OutputPass applies tone mapping and sRGB.
 const composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));
 const gtao=new GTAOPass(scene,camera,1,1);gtao.updateGtaoMaterial({radius:.6,distanceExponent:1.4,thickness:1.2,scale:1.1,samples:16});gtao.updatePdMaterial({lumaPhi:10,depthPhi:2,normalPhi:3,radius:6,rings:2,samples:16});gtao.blendIntensity=.9;gtao.normalMaterial.side=THREE.DoubleSide;if(isTouch)gtao.enabled=false;composer.addPass(gtao);

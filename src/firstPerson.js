@@ -40,13 +40,13 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
     zone.addEventListener('pointermove', e => { if (e.pointerId === touch.stickId) stickFrom(e); });
     const release = e => { if (e.pointerId !== touch.stickId) return; touch.stickId = null; touch.stick.set(0, 0); setKnob(); stick.classList.remove('active'); stick.style.left = stick.style.top = ''; };
     zone.addEventListener('pointerup', release); zone.addEventListener('pointercancel', release);
-    domElement.addEventListener('pointerdown', e => { if (!active || e.pointerType === 'mouse' || touch.lookId !== null) return; touch.lookId = e.pointerId; touch.last.set(e.clientX, e.clientY); ui.touched?.(); });
+    domElement.addEventListener('pointerdown', e => { if (!active || e.pointerType === 'mouse' || touch.lookId !== null) return; touch.lookId = e.pointerId; touch.last.set(e.clientX, e.clientY); touch.down = { x: e.clientX, y: e.clientY, t: performance.now() }; ui.touched?.(); });
     addEventListener('pointermove', e => {
       if (e.pointerId !== touch.lookId) return;
       const dx = e.clientX - touch.last.x, dy = e.clientY - touch.last.y; touch.last.set(e.clientX, e.clientY);
       euler.setFromQuaternion(camera.quaternion); euler.y -= dx * LOOK_SPEED; euler.x = THREE.MathUtils.clamp(euler.x - dy * LOOK_SPEED, -1.45, 1.45); camera.quaternion.setFromEuler(euler);
     });
-    const endLook = e => { if (e.pointerId === touch.lookId) touch.lookId = null; };
+    const endLook = e => { if (e.pointerId !== touch.lookId) return; touch.lookId = null; const d = touch.down; if (d && performance.now() - d.t < 350 && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 14) tapAt(e.clientX, e.clientY); };
     addEventListener('pointerup', endLook); addEventListener('pointercancel', endLook);
     useButton.addEventListener('pointerdown', e => { e.preventDefault(); use(); });
     runButton.addEventListener('pointerdown', e => { e.preventDefault(); touch.run = !touch.run; runButton.classList.toggle('on', touch.run); });
@@ -69,6 +69,20 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
   controls.addEventListener('unlock', () => { keys.clear(); ui.setLocked(false); });
 
   function use() { if (focused) focused.action(); }
+  const targets = () => interactables.map(i => i.hit || i.mesh);
+  const entryFor = o => interactables.find(i => i.hit === o || i.mesh === o);
+  // tap a lift button directly on screen (short touch with almost no drag)
+  function tapAt(x, y) {
+    const r = domElement.getBoundingClientRect();
+    ray.setFromCamera({ x: ((x - r.left) / r.width) * 2 - 1, y: -((y - r.top) / r.height) * 2 + 1 }, camera); ray.far = REACH + 0.6;
+    const hit = ray.intersectObjects(targets(), false)[0]; if (hit) { const e = entryFor(hit.object); e.action(); e.mesh.material.emissiveIntensity = 4; ui.pressed?.(); }
+  }
+  // collision world is built once, after the loading screen has painted
+  async function prepare() {
+    if (octree) return;
+    await new Promise(res => { let done = false; const go = () => { if (!done) { done = true; res(); } }; requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(go, 0))); setTimeout(go, 200); });
+    octree = buildOctree();
+  }
 
   function enter(spawn, lookAt) {
     if (!octree) octree = buildOctree();
@@ -159,8 +173,8 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
     camera.position.set(capsule.start.x, feet() + EYE, capsule.start.z);
     // interaction focus
     ray.setFromCamera({ x: 0, y: 0 }, camera); ray.far = REACH;
-    const hits = ray.intersectObjects(interactables.map(i => i.mesh), false);
-    const next = hits.length ? interactables.find(i => i.mesh === hits[0].object) : null;
+    const hits = ray.intersectObjects(targets(), false);
+    const next = hits.length ? entryFor(hits[0].object) : null;
     if (focused && focused !== next) focused.mesh.material.emissiveIntensity = 0.7;
     focused = next;
     touchUI?.useButton.classList.toggle('ready', !!next);
@@ -168,5 +182,5 @@ export function createFirstPerson({ camera, domElement, buildOctree, heightAt, l
     else ui.setPrompt('');
   }
 
-  return { enter, exit, update, get active() { return active; }, get locked() { return controls.isLocked; } };
+  return { prepare, enter, exit, update, get active() { return active; }, get locked() { return controls.isLocked; } };
 }
